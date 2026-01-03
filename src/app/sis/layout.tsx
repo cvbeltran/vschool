@@ -5,6 +5,13 @@ import { useRouter, usePathname } from "next/navigation";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
   LayoutDashboard,
   UserPlus,
   Users,
@@ -38,6 +45,7 @@ export default function SISLayout({
   const router = useRouter();
   const pathname = usePathname();
   const [role, setRole] = useState<Role>("principal");
+  const [school, setSchool] = useState<string>("all");
 
   useEffect(() => {
     const checkSessionAndFetchRole = async () => {
@@ -103,17 +111,35 @@ export default function SISLayout({
     <div className="flex min-h-screen flex-col">
       {/* Top Bar */}
       <header className="border-b bg-background">
-        <div className="flex h-14 items-center justify-between px-4 md:px-6">
+        <div className="flex h-14 items-center justify-between gap-4 px-4 md:px-6">
           <h1 className="text-lg font-semibold">vSchool · SIS</h1>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={handleLogout}
-            className="gap-2"
-          >
-            <LogOut className="size-4" />
-            <span>Logout</span>
-          </Button>
+          <div className="flex items-center gap-4">
+            <div className="flex items-center gap-2">
+              <label htmlFor="school-select" className="text-sm font-medium">
+                School:
+              </label>
+              <Select value={school} onValueChange={setSchool}>
+                <SelectTrigger className="w-[180px]">
+                  <SelectValue className="truncate" placeholder="All Schools" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Schools</SelectItem>
+                  <SelectItem value="a">School A</SelectItem>
+                  <SelectItem value="b">School B</SelectItem>
+                  <SelectItem value="c">School Carlo Vittorio Fernandez Beltran</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleLogout}
+              className="gap-2"
+            >
+              <LogOut className="size-4" />
+              <span>Logout</span>
+            </Button>
+          </div>
         </div>
       </header>
 
