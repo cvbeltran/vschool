@@ -46,6 +46,11 @@ export default function SISLayout({
   const pathname = usePathname();
   const [role, setRole] = useState<Role>("principal");
   const [school, setSchool] = useState<string>("all");
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   useEffect(() => {
     const checkSessionAndFetchRole = async () => {
@@ -118,17 +123,19 @@ export default function SISLayout({
               <label htmlFor="school-select" className="text-sm font-medium">
                 School:
               </label>
-              <Select value={school} onValueChange={setSchool}>
-                <SelectTrigger className="w-[180px]">
-                  <SelectValue className="truncate" placeholder="All Schools" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Schools</SelectItem>
-                  <SelectItem value="a">School A</SelectItem>
-                  <SelectItem value="b">School B</SelectItem>
-                  <SelectItem value="c">School Carlo Vittorio Fernandez Beltran</SelectItem>
-                </SelectContent>
-              </Select>
+              {mounted && (
+                <Select value={school} onValueChange={setSchool}>
+                  <SelectTrigger className="w-[180px]">
+                    <SelectValue className="truncate" placeholder="All Schools" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All Schools</SelectItem>
+                    <SelectItem value="a">School A</SelectItem>
+                    <SelectItem value="b">School B</SelectItem>
+                    <SelectItem value="c">School Carlo Vittorio Fernandez Beltran</SelectItem>
+                  </SelectContent>
+                </Select>
+              )}
             </div>
             <Button
               variant="ghost"

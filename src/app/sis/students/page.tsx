@@ -3,6 +3,8 @@
 import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase/client";
 import { Card, CardContent } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Download } from "lucide-react";
 
 interface Student {
   id: string;
@@ -12,12 +14,31 @@ interface Student {
   batch_id: string | null;
 }
 
+type Role = "principal" | "admin";
+
 export default function StudentsPage() {
   const [students, setStudents] = useState<Student[]>([]);
   const [loading, setLoading] = useState(true);
+  const [role, setRole] = useState<Role>("principal");
 
   useEffect(() => {
-    const fetchStudents = async () => {
+    const fetchData = async () => {
+      // Fetch user role
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      if (session) {
+        const { data: profile } = await supabase
+          .from("profiles")
+          .select("role")
+          .eq("id", session.user.id)
+          .single();
+        if (profile?.role) {
+          setRole((profile.role as Role) || "principal");
+        }
+      }
+
+      // Fetch students
       const { data, error } = await supabase
         .from("students")
         .select("id, first_name, last_name, email, batch_id")
@@ -33,7 +54,7 @@ export default function StudentsPage() {
       setLoading(false);
     };
 
-    fetchStudents();
+    fetchData();
   }, []);
 
   if (loading) {
@@ -45,9 +66,21 @@ export default function StudentsPage() {
     );
   }
 
+  const handleExport = () => {
+    window.location.href = "/sis/students/export";
+  };
+
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-semibold">Students</h1>
+      <div className="flex items-center justify-between">
+        <h1 className="text-2xl font-semibold">Students</h1>
+        {role === "principal" && (
+          <Button onClick={handleExport} variant="outline" className="gap-2">
+            <Download className="size-4" />
+            Export CSV
+          </Button>
+        )}
+      </div>
 
       {students.length === 0 ? (
         <Card>
