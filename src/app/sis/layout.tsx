@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
@@ -17,7 +17,9 @@ import {
 } from "lucide-react";
 import { supabase } from "@/lib/supabase/client";
 
-const navigationItems = [
+type Role = "principal" | "admin";
+
+const allNavigationItems = [
   { label: "Dashboard", href: "/sis", icon: LayoutDashboard },
   { label: "Admissions", href: "/sis/admissions", icon: UserPlus },
   { label: "Batches", href: "/sis/batches", icon: Users },
@@ -35,9 +37,10 @@ export default function SISLayout({
 }) {
   const router = useRouter();
   const pathname = usePathname();
+  const [role, setRole] = useState<Role>("principal");
 
   useEffect(() => {
-    const checkSession = async () => {
+    const checkSessionAndFetchRole = async () => {
       // Skip session check for auth routes
       if (pathname?.startsWith("/sis/auth")) {
         return;
@@ -48,11 +51,39 @@ export default function SISLayout({
       } = await supabase.auth.getSession();
       if (!session) {
         router.push("/sis/auth/login");
+        return;
       }
+
+      // Fetch user profile role
+      const { data: profile, error } = await supabase
+        .from("profiles")
+        .select("role")
+        .eq("id", session.user.id)
+        .single();
+
+      if (error || !profile) {
+        // Default to 'principal' if profile not found
+        setRole("principal");
+        return;
+      }
+
+      setRole((profile.role as Role) || "principal");
     };
 
-    checkSession();
+    checkSessionAndFetchRole();
   }, [router, pathname]);
+
+  // Filter navigation items based on role
+  const navigationItems = allNavigationItems.filter((item) => {
+    if (role === "principal") {
+      return true; // Show all items for principal
+    }
+    if (role === "admin") {
+      // Hide Reports and Settings for admin
+      return item.label !== "Reports" && item.label !== "Settings";
+    }
+    return true;
+  });
 
   const handleLogout = async () => {
     await supabase.auth.signOut();
