@@ -1,3 +1,3 @@
 export default function SISPage() {
-  return <div>SIS Module</div>
+  return <div>SIS Dashboard</div>;
 }
