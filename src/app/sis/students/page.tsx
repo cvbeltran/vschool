@@ -1,10 +1,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase/client";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Download } from "lucide-react";
+import { Download, ExternalLink } from "lucide-react";
 
 interface Student {
   id: string;
@@ -17,6 +18,7 @@ interface Student {
 type Role = "principal" | "admin";
 
 export default function StudentsPage() {
+  const router = useRouter();
   const [students, setStudents] = useState<Student[]>([]);
   const [loading, setLoading] = useState(true);
   const [role, setRole] = useState<Role>("principal");
@@ -73,7 +75,12 @@ export default function StudentsPage() {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold">Students</h1>
+        <div>
+          <h1 className="text-2xl font-semibold">Students</h1>
+          <p className="text-sm text-muted-foreground mt-1">
+            Identity & record layer: Manage student identity information
+          </p>
+        </div>
         {role === "principal" && (
           <Button onClick={handleExport} variant="outline" className="gap-2">
             <Download className="size-4" />
@@ -84,8 +91,11 @@ export default function StudentsPage() {
 
       {students.length === 0 ? (
         <Card>
-          <CardContent className="py-8 text-center text-muted-foreground">
-            No students yet
+          <CardContent className="py-12 text-center">
+            <div className="text-muted-foreground mb-2">No students yet</div>
+            <div className="text-sm text-muted-foreground">
+              Students will appear here after admissions are enrolled.
+            </div>
           </CardContent>
         </Card>
       ) : (
@@ -102,17 +112,31 @@ export default function StudentsPage() {
                 <th className="px-4 py-3 text-left text-sm font-medium">
                   Batch
                 </th>
+                <th className="px-4 py-3 text-left text-sm font-medium">
+                  Actions
+                </th>
               </tr>
             </thead>
             <tbody>
               {students.map((student) => (
-                <tr key={student.id} className="border-b">
+                <tr key={student.id} className="border-b hover:bg-muted/50">
                   <td className="px-4 py-3 text-sm">
                     {student.last_name}, {student.first_name}
                   </td>
-                  <td className="px-4 py-3 text-sm">{student.email}</td>
+                  <td className="px-4 py-3 text-sm">{student.email || <span className="text-muted-foreground">—</span>}</td>
                   <td className="px-4 py-3 text-sm">
-                    {student.batch_id || "—"}
+                    {student.batch_id || <span className="text-muted-foreground">Unassigned</span>}
+                  </td>
+                  <td className="px-4 py-3">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => router.push(`/sis/students/${student.id}`)}
+                      className="gap-1"
+                    >
+                      View
+                      <ExternalLink className="size-3" />
+                    </Button>
                   </td>
                 </tr>
               ))}

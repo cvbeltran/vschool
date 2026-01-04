@@ -11,31 +11,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import {
-  LayoutDashboard,
-  UserPlus,
-  Users,
-  GraduationCap,
-  Calendar,
-  MessageSquare,
-  FileText,
-  Settings,
-  LogOut,
-} from "lucide-react";
+import { LogOut } from "lucide-react";
 import { supabase } from "@/lib/supabase/client";
-
-type Role = "principal" | "admin";
-
-const allNavigationItems = [
-  { label: "Dashboard", href: "/sis", icon: LayoutDashboard },
-  { label: "Admissions", href: "/sis/admissions", icon: UserPlus },
-  { label: "Batches", href: "/sis/batches", icon: Users },
-  { label: "Students", href: "/sis/students", icon: GraduationCap },
-  { label: "Attendance", href: "/sis/attendance", icon: Calendar },
-  { label: "Communications", href: "/sis/communications", icon: MessageSquare },
-  { label: "Reports", href: "/sis/reports", icon: FileText },
-  { label: "Settings", href: "/sis/settings", icon: Settings },
-];
+import { normalizeRole } from "@/lib/rbac";
+import { getSidebarForRole, type NormalizedRole } from "@/lib/sidebar-config";
 
 export default function SISLayout({
   children,
@@ -44,7 +23,7 @@ export default function SISLayout({
 }) {
   const router = useRouter();
   const pathname = usePathname();
-  const [role, setRole] = useState<Role>("principal");
+  const [role, setRole] = useState<"principal" | "admin" | "teacher">("principal");
   const [school, setSchool] = useState<string>("all");
   const [mounted, setMounted] = useState(false);
 
@@ -80,23 +59,16 @@ export default function SISLayout({
         return;
       }
 
-      setRole((profile.role as Role) || "principal");
+      // Normalize role (registrar = admin)
+      const normalizedRole = normalizeRole(profile.role);
+      setRole(normalizedRole as "principal" | "admin" | "teacher");
     };
 
     checkSessionAndFetchRole();
   }, [router, pathname]);
 
-  // Filter navigation items based on role
-  const navigationItems = allNavigationItems.filter((item) => {
-    if (role === "principal") {
-      return true; // Show all items for principal
-    }
-    if (role === "admin") {
-      // Hide Reports and Settings for admin
-      return item.label !== "Reports" && item.label !== "Settings";
-    }
-    return true;
-  });
+  // Get filtered sidebar config for current role
+  const sidebarSections = getSidebarForRole(role);
 
   const handleLogout = async () => {
     await supabase.auth.signOut();
@@ -154,23 +126,33 @@ export default function SISLayout({
       <div className="flex flex-1 flex-col md:flex-row">
         {/* Sidebar */}
         <aside className="w-full border-b bg-muted/40 md:w-64 md:border-b-0 md:border-r">
-          <nav className="flex flex-row gap-1 overflow-x-auto p-2 md:flex-col md:overflow-x-visible md:p-4">
-            {navigationItems.map((item) => {
-              const Icon = item.icon;
-              return (
-                <Button
-                  key={item.href}
-                  variant="ghost"
-                  className="w-full justify-start gap-2 md:w-full"
-                  asChild
-                >
-                  <Link href={item.href}>
-                    <Icon className="size-4 shrink-0" />
-                    <span className="whitespace-nowrap">{item.label}</span>
-                  </Link>
-                </Button>
-              );
-            })}
+          <nav className="flex flex-row gap-1 overflow-x-auto p-2 md:flex-col md:overflow-x-visible md:p-4 md:gap-1">
+            {sidebarSections.map((section, sectionIndex) => (
+              <div key={sectionIndex} className="space-y-1">
+                {section.label && (
+                  <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                    {section.label}
+                  </div>
+                )}
+                {section.items.map((item) => {
+                  const Icon = item.icon;
+                  const isActive = pathname === item.href || pathname?.startsWith(item.href + "/");
+                  return (
+                    <Button
+                      key={item.href}
+                      variant={isActive ? "secondary" : "ghost"}
+                      className="w-full justify-start gap-2 md:w-full"
+                      asChild
+                    >
+                      <Link href={item.href}>
+                        <Icon className="size-4 shrink-0" />
+                        <span className="whitespace-nowrap">{item.label}</span>
+                      </Link>
+                    </Button>
+                  );
+                })}
+              </div>
+            ))}
           </nav>
         </aside>
 
