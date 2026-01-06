@@ -127,7 +127,7 @@ export default function AdmissionsPage() {
         setSchools(schoolsData || []);
       }
 
-      // Fetch all programs for display (used in table)
+      // Fetch all programs for display (used in table)a
       const { data: programsData, error: programsError } = await supabase
         .from("programs")
         .select("id, school_id, name, code")
