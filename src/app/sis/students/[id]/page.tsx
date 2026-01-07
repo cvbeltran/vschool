@@ -82,6 +82,20 @@ interface Admission {
   section_id: string | null;
 }
 
+// Helper function to check if a string is a valid UUID
+const isValidUUID = (str: string): boolean => {
+  if (!str || typeof str !== "string") return false;
+  // UUID format: 8-4-4-4-12 hexadecimal characters
+  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  return uuidRegex.test(str.trim());
+};
+
+// Helper function to check if a value is a system default ID (not a valid UUID)
+const isSystemDefaultId = (value: string | null | undefined): boolean => {
+  if (!value || typeof value !== "string") return false;
+  return value.startsWith("default-") || !isValidUUID(value);
+};
+
 export default function StudentDetailPage() {
   const params = useParams();
   const router = useRouter();
@@ -264,8 +278,20 @@ export default function StudentDetailPage() {
         setRole("teacher"); // Default to read-only
       }
 
+      // Ensure we have a valid session before fetching student data
+      const { data: { session: currentSession } } = await supabase.auth.getSession();
+      
+      if (!currentSession) {
+        setError("Authentication required. Please log in.");
+        setLoading(false);
+        router.push("/sis/auth/login");
+        return;
+      }
+
       // Fetch student - try comprehensive fields first, fallback to legacy
       // Note: Taxonomies will be fetched after formData is set (via useEffect)
+      // The Supabase client automatically includes the session token in the Authorization header
+      // Note: student_number column removed as it doesn't exist in the database schema
       const { data: studentData, error: studentError } = await supabase
         .from("students")
         .select(`
@@ -276,7 +302,6 @@ export default function StudentDetailPage() {
           date_of_birth,
           sex_id,
           nationality,
-          student_number,
           status,
           primary_email,
           phone,
@@ -304,6 +329,30 @@ export default function StudentDetailPage() {
         .single();
 
       if (studentError) {
+        // Log detailed error information for debugging
+        console.error("Error fetching student:", {
+          code: studentError.code,
+          message: studentError.message,
+          details: studentError.details,
+          hint: studentError.hint,
+          studentId: studentId,
+        });
+
+        // Handle authentication/authorization errors
+        if (studentError.code === "PGRST301" || studentError.message?.includes("JWT")) {
+          setError("Authentication failed. Please log in again.");
+          setLoading(false);
+          router.push("/sis/auth/login");
+          return;
+        }
+
+        // Handle Row Level Security (RLS) errors
+        if (studentError.code === "42501" || studentError.message?.includes("permission") || studentError.message?.includes("policy")) {
+          setError("You don't have permission to view this student record.");
+          setLoading(false);
+          return;
+        }
+
         // Handle schema mismatch gracefully
         if ((studentError.code === "42703" || studentError.code === "PGRST204")) {
           // Try with minimal fields (legacy schema)
@@ -403,11 +452,11 @@ export default function StudentDetailPage() {
           legal_last_name: studentData.legal_last_name || studentData.last_name,
           primary_email: studentData.primary_email || studentData.email,
           // Explicitly preserve taxonomy ID fields (can be null)
-          // Coerce to string to ensure consistency (null stays null, UUID becomes string)
-          sex_id: studentData.sex_id ? String(studentData.sex_id) : null,
-          economic_status_id: studentData.economic_status_id ? String(studentData.economic_status_id) : null,
-          primary_language_id: studentData.primary_language_id ? String(studentData.primary_language_id) : null,
-          guardian_relationship_id: studentData.guardian_relationship_id ? String(studentData.guardian_relationship_id) : null,
+          // Coerce to string and trim to ensure consistency (null stays null, UUID becomes trimmed string)
+          sex_id: studentData.sex_id ? String(studentData.sex_id).trim() : null,
+          economic_status_id: studentData.economic_status_id ? String(studentData.economic_status_id).trim() : null,
+          primary_language_id: studentData.primary_language_id ? String(studentData.primary_language_id).trim() : null,
+          guardian_relationship_id: studentData.guardian_relationship_id ? String(studentData.guardian_relationship_id).trim() : null,
         };
         setStudent(normalizedStudent);
         
@@ -423,36 +472,41 @@ export default function StudentDetailPage() {
         }
         
         // ONE-TIME HYDRATION GUARD: Only initialize formData once per studentId
-        // This prevents overwriting formData on component remounts or re-renders
-        if (hydrationGuardRef.current !== studentId) {
-          // Apply smart defaults if fields are empty (sex requires explicit choice, no default)
-          // Preserve all fetched values including economic_status_id
-          const defaultedStudent: Partial<Student> = {
-            ...normalizedStudent,
-            status: normalizedStudent.status || getSmartDefault("student_status") || "",
-            // sex: No default - requires explicit user choice
-            // economic_status_id: Preserve fetched value (null or UUID string)
-          };
-          
-          // DEV DEBUG: Log formData initialization
-          if (process.env.NODE_ENV === 'development') {
-            console.log('[DEV] Initializing formData:', {
-              sex_id: defaultedStudent.sex_id,
-              economic_status_id: defaultedStudent.economic_status_id,
-              primary_language_id: defaultedStudent.primary_language_id,
-              guardian_relationship_id: defaultedStudent.guardian_relationship_id,
-            });
-          }
-          
-          setFormData(defaultedStudent);
+        // However, always refresh formData on page load/refresh to ensure correct values are displayed
+        const shouldInitialize = hydrationGuardRef.current !== studentId;
+        
+        // Apply smart defaults if fields are empty (sex requires explicit choice, no default)
+        // Preserve all fetched values including economic_status_id
+        const defaultedStudent: Partial<Student> = {
+          ...normalizedStudent,
+          status: normalizedStudent.status || getSmartDefault("student_status") || "",
+          // sex: No default - requires explicit user choice
+          // economic_status_id: Preserve fetched value (null or UUID string)
+        };
+        
+        // DEV DEBUG: Log formData initialization
+        if (process.env.NODE_ENV === 'development') {
+          console.log('[DEV] Initializing/Refreshing formData:', {
+            shouldInitialize,
+            sex_id: defaultedStudent.sex_id,
+            economic_status_id: defaultedStudent.economic_status_id,
+            primary_language_id: defaultedStudent.primary_language_id,
+            guardian_relationship_id: defaultedStudent.guardian_relationship_id,
+          });
+        }
+        
+        // Always update formData with fresh data from database (important for refresh)
+        // Only set initialized flag if this is the first time for this studentId
+        setFormData(defaultedStudent);
+        if (shouldInitialize) {
           setFormDataInitialized(true);
           hydrationGuardRef.current = studentId;
-          
-          // Fetch taxonomies with explicit current values to avoid stale closure
-          setTimeout(() => {
-            fetchTaxonomies(defaultedStudent);
-          }, 0);
         }
+        
+        // Fetch taxonomies with explicit current values to avoid stale closure
+        setTimeout(() => {
+          fetchTaxonomies(defaultedStudent);
+        }, 0);
 
         // Fetch admission if admission_id exists
         if (normalizedStudent.admission_id) {
@@ -570,11 +624,18 @@ export default function StudentDetailPage() {
       if (formData.legal_last_name !== undefined) updatePayload.legal_last_name = formData.legal_last_name || null;
       if (formData.preferred_name !== undefined) updatePayload.preferred_name = formData.preferred_name || null;
       if (formData.date_of_birth !== undefined) updatePayload.date_of_birth = formData.date_of_birth || null;
-      // sex_id: Handle UUID string or null
+      // sex_id: Handle UUID string or null - reject system default IDs
       if (formData.sex_id !== undefined) {
         const sexId = formData.sex_id;
         if (sexId && typeof sexId === "string" && sexId.trim() !== "") {
-          updatePayload.sex_id = sexId.trim();
+          // Only save if it's a valid UUID (not a system default like "default-male")
+          if (isValidUUID(sexId.trim())) {
+            updatePayload.sex_id = sexId.trim();
+          } else {
+            // System default ID - don't save (set to null or skip)
+            // User needs to select a real taxonomy item from the database
+            updatePayload.sex_id = null;
+          }
         } else {
           updatePayload.sex_id = null;
         }
@@ -589,11 +650,16 @@ export default function StudentDetailPage() {
       if (formData.emergency_contact_phone !== undefined) updatePayload.emergency_contact_phone = formData.emergency_contact_phone || null;
     } else if (tab === "guardians") {
       if (formData.guardian_name !== undefined) updatePayload.guardian_name = formData.guardian_name || null;
-      // guardian_relationship_id: Handle UUID string or null
+      // guardian_relationship_id: Handle UUID string or null - reject system default IDs
       if (formData.guardian_relationship_id !== undefined) {
         const guardianRelationshipId = formData.guardian_relationship_id;
         if (guardianRelationshipId && typeof guardianRelationshipId === "string" && guardianRelationshipId.trim() !== "") {
-          updatePayload.guardian_relationship_id = guardianRelationshipId.trim();
+          // Only save if it's a valid UUID (not a system default)
+          if (isValidUUID(guardianRelationshipId.trim())) {
+            updatePayload.guardian_relationship_id = guardianRelationshipId.trim();
+          } else {
+            updatePayload.guardian_relationship_id = null;
+          }
         } else {
           updatePayload.guardian_relationship_id = null;
         }
@@ -606,9 +672,14 @@ export default function StudentDetailPage() {
       // Always include economic_status_id in payload if it exists in formData (even if null)
       if (formData.economic_status_id !== undefined) {
         const economicStatusId = formData.economic_status_id;
-        // Allow null or valid UUID string - explicitly set null if empty/whitespace
+        // Allow null or valid UUID string - explicitly set null if empty/whitespace or system default
         if (economicStatusId && typeof economicStatusId === "string" && economicStatusId.trim() !== "") {
-          updatePayload.economic_status_id = economicStatusId.trim();
+          // Only save if it's a valid UUID (not a system default)
+          if (isValidUUID(economicStatusId.trim())) {
+            updatePayload.economic_status_id = economicStatusId.trim();
+          } else {
+            updatePayload.economic_status_id = null;
+          }
         } else {
           // Explicitly set to null (user cleared selection or value was null)
           updatePayload.economic_status_id = null;
@@ -617,7 +688,12 @@ export default function StudentDetailPage() {
       if (formData.primary_language_id !== undefined) {
         const primaryLanguageId = formData.primary_language_id;
         if (primaryLanguageId && typeof primaryLanguageId === "string" && primaryLanguageId.trim() !== "") {
-          updatePayload.primary_language_id = primaryLanguageId.trim();
+          // Only save if it's a valid UUID (not a system default)
+          if (isValidUUID(primaryLanguageId.trim())) {
+            updatePayload.primary_language_id = primaryLanguageId.trim();
+          } else {
+            updatePayload.primary_language_id = null;
+          }
         } else {
           updatePayload.primary_language_id = null;
         }
@@ -651,6 +727,7 @@ export default function StudentDetailPage() {
     }
 
     // Refresh student data with explicit field selection to ensure all taxonomy IDs are included
+    // Note: student_number column removed as it doesn't exist in the database schema
     const { data: updatedStudent } = await supabase
       .from("students")
       .select(`
@@ -661,7 +738,6 @@ export default function StudentDetailPage() {
         date_of_birth,
         sex_id,
         nationality,
-        student_number,
         status,
         primary_email,
         phone,
@@ -695,11 +771,11 @@ export default function StudentDetailPage() {
         legal_last_name: updatedStudent.legal_last_name || updatedStudent.last_name,
         primary_email: updatedStudent.primary_email || updatedStudent.email,
         // Explicitly preserve taxonomy ID fields (can be null)
-        // Coerce to string to ensure consistency
-        sex_id: updatedStudent.sex_id ? String(updatedStudent.sex_id) : null,
-        economic_status_id: updatedStudent.economic_status_id ? String(updatedStudent.economic_status_id) : null,
-        primary_language_id: updatedStudent.primary_language_id ? String(updatedStudent.primary_language_id) : null,
-        guardian_relationship_id: updatedStudent.guardian_relationship_id ? String(updatedStudent.guardian_relationship_id) : null,
+        // Coerce to string and trim to ensure consistency
+        sex_id: updatedStudent.sex_id ? String(updatedStudent.sex_id).trim() : null,
+        economic_status_id: updatedStudent.economic_status_id ? String(updatedStudent.economic_status_id).trim() : null,
+        primary_language_id: updatedStudent.primary_language_id ? String(updatedStudent.primary_language_id).trim() : null,
+        guardian_relationship_id: updatedStudent.guardian_relationship_id ? String(updatedStudent.guardian_relationship_id).trim() : null,
       };
       setStudent(normalizedStudent);
       // After save: merge updated values with existing formData to preserve unsaved changes in other tabs
@@ -979,8 +1055,8 @@ export default function StudentDetailPage() {
               <div className="space-y-2">
                 <Label htmlFor="sex_id">Sex *</Label>
                 <Select
-                  value={formData.sex_id ? String(formData.sex_id) : ""}
-                  onValueChange={(value) => setFormData({ ...formData, sex_id: value || null })}
+                  value={formData.sex_id ? String(formData.sex_id).trim() : ""}
+                  onValueChange={(value) => setFormData({ ...formData, sex_id: value ? value.trim() : null })}
                   disabled={!canEdit || isWithdrawn()}
                   required
                 >
@@ -1004,7 +1080,12 @@ export default function StudentDetailPage() {
                     Value no longer supported — please update
                   </p>
                 )}
-                {taxonomyDefaults.has(TAXONOMY_KEYS.sex) && taxonomyDefaults.get(TAXONOMY_KEYS.sex) && (
+                {formData.sex_id && isSystemDefaultId(formData.sex_id) && (
+                  <p className="text-xs text-orange-600">
+                    ⚠️ System default selected. This will be saved as empty. Please configure Sex taxonomy items in Settings → Taxonomies to save a value.
+                  </p>
+                )}
+                {taxonomyDefaults.has(TAXONOMY_KEYS.sex) && taxonomyDefaults.get(TAXONOMY_KEYS.sex) && !formData.sex_id && (
                   <p className="text-xs text-muted-foreground">
                     Using system defaults. You can customize this later in Settings → Taxonomies.
                   </p>
@@ -1176,8 +1257,8 @@ export default function StudentDetailPage() {
               <div className="space-y-2">
                 <Label htmlFor="guardian_relationship_id">Relationship</Label>
                 <Select
-                  value={formData.guardian_relationship_id ? String(formData.guardian_relationship_id) : ""}
-                  onValueChange={(value) => setFormData({ ...formData, guardian_relationship_id: value || null })}
+                  value={formData.guardian_relationship_id ? String(formData.guardian_relationship_id).trim() : ""}
+                  onValueChange={(value) => setFormData({ ...formData, guardian_relationship_id: value ? value.trim() : null })}
                   disabled={!canEdit || isWithdrawn()}
                 >
                   <SelectTrigger>
@@ -1273,7 +1354,7 @@ export default function StudentDetailPage() {
               <div className="space-y-2">
                 <Label htmlFor="economic_status_id">Economic Status</Label>
                 <Select
-                  value={formData.economic_status_id ? String(formData.economic_status_id) : ""}
+                  value={formData.economic_status_id ? String(formData.economic_status_id).trim() : ""}
                   onValueChange={(value) => {
                     // DEV DEBUG: Log Select value change
                     if (process.env.NODE_ENV === 'development') {
@@ -1282,7 +1363,7 @@ export default function StudentDetailPage() {
                         formDataValue: formData.economic_status_id,
                       });
                     }
-                    setFormData({ ...formData, economic_status_id: value || null });
+                    setFormData({ ...formData, economic_status_id: value ? value.trim() : null });
                   }}
                   disabled={!canEdit || isWithdrawn() || isLegacy()}
                 >
@@ -1311,7 +1392,7 @@ export default function StudentDetailPage() {
               <div className="space-y-2">
                 <Label htmlFor="primary_language_id">Primary Language</Label>
                 <Select
-                  value={formData.primary_language_id ? String(formData.primary_language_id) : ""}
+                  value={formData.primary_language_id ? String(formData.primary_language_id).trim() : ""}
                   onValueChange={(value) => {
                     // DEV DEBUG: Log Select value change
                     if (process.env.NODE_ENV === 'development') {
@@ -1320,7 +1401,7 @@ export default function StudentDetailPage() {
                         formDataValue: formData.primary_language_id,
                       });
                     }
-                    setFormData({ ...formData, primary_language_id: value || null });
+                    setFormData({ ...formData, primary_language_id: value ? value.trim() : null });
                   }}
                   disabled={!canEdit || isWithdrawn() || isLegacy()}
                 >
