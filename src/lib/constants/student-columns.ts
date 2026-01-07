@@ -21,6 +21,7 @@ export const STUDENT_COLUMNS = {
   sexId: "sex_id", // FK to taxonomy_items.id
   nationality: "nationality",
   studentNumber: "student_number",
+  studentLrn: "student_lrn", // Learner Reference Number (LRN)
   status: "status", // FK to taxonomy_items.id (student_status)
   
   // Contact fields
