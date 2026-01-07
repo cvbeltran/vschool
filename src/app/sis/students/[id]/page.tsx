@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useEffect, useState, useRef } from "react";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabase/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -20,6 +20,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ArrowLeft, Save, AlertCircle, Loader2 } from "lucide-react";
 import { normalizeRole, canPerform } from "@/lib/rbac";
 import { Badge } from "@/components/ui/badge";
+import { fetchMultipleTaxonomies, getSmartDefault, type TaxonomyItem, type TaxonomyFetchResult } from "@/lib/taxonomies";
+import { STUDENT_COLUMNS, TAXONOMY_KEYS } from "@/lib/constants/student-columns";
 
 interface Student {
   id: string;
@@ -27,25 +29,25 @@ interface Student {
   legal_last_name?: string | null;
   preferred_name?: string | null;
   date_of_birth?: string | null;
-  sex?: string | null;
+  sex_id?: string | null; // FK to taxonomy_items.id (taxonomy key: "sex")
   nationality?: string | null;
   student_number?: string | null;
-  status?: string | null;
+  status?: string | null; // FK to taxonomy_items.id (taxonomy key: "student_status")
   primary_email?: string | null;
   phone?: string | null;
   address?: string | null;
   emergency_contact_name?: string | null;
   emergency_contact_phone?: string | null;
   guardian_name?: string | null;
-  guardian_relationship?: string | null;
+  guardian_relationship_id?: string | null; // FK to taxonomy_items.id (taxonomy key: "guardian_relationship")
   guardian_email?: string | null;
   guardian_phone?: string | null;
   consent_flags?: boolean | null;
-  economic_status?: string | null;
-  primary_language?: string | null;
+  economic_status_id?: string | null; // FK to taxonomy_items.id (taxonomy key: "economic_status")
+  primary_language_id?: string | null; // FK to taxonomy_items.id (taxonomy key: "language")
   special_needs_flag?: boolean | null;
   previous_school?: string | null;
-  entry_type?: string | null;
+  entry_type?: string | null; // FK to taxonomy_items.id (taxonomy key: "entry_type")
   notes?: string | null;
   admission_id: string | null;
   created_at: string;
@@ -80,16 +82,14 @@ interface Admission {
   section_id: string | null;
 }
 
-interface TaxonomyItem {
-  id: string;
-  code: string;
-  label: string;
-}
-
 export default function StudentDetailPage() {
   const params = useParams();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const studentId = params.id as string;
+  
+  // One-time hydration guard: track if we've initialized formData for this studentId
+  const hydrationGuardRef = useRef<string | null>(null);
   
   const [student, setStudent] = useState<Student | null>(null);
   const [school, setSchool] = useState<School | null>(null);
@@ -101,102 +101,125 @@ export default function StudentDetailPage() {
   const [saving, setSaving] = useState(false);
   const [role, setRole] = useState<"principal" | "admin" | "teacher">("principal");
   const [originalRole, setOriginalRole] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState("overview");
+  
+  // URL-based tab persistence: read from query param, default to "overview"
+  const tabFromUrl = searchParams.get("tab") || "overview";
+  const [activeTab, setActiveTab] = useState(tabFromUrl);
 
-  // Taxonomy data
+  // Taxonomy data with smart defaults
   const [sexOptions, setSexOptions] = useState<TaxonomyItem[]>([]);
   const [economicStatusOptions, setEconomicStatusOptions] = useState<TaxonomyItem[]>([]);
   const [languageOptions, setLanguageOptions] = useState<TaxonomyItem[]>([]);
   const [relationshipOptions, setRelationshipOptions] = useState<TaxonomyItem[]>([]);
-  const [statusOptions] = useState([
-    { value: "active", label: "Active" },
-    { value: "inactive", label: "Inactive" },
-    { value: "withdrawn", label: "Withdrawn" },
-  ]);
-  const [entryTypeOptions] = useState([
-    { value: "freshman", label: "Freshman" },
-    { value: "transferee", label: "Transferee" },
-    { value: "returning", label: "Returning" },
-  ]);
+  const [statusOptions, setStatusOptions] = useState<TaxonomyItem[]>([]);
+  const [entryTypeOptions, setEntryTypeOptions] = useState<TaxonomyItem[]>([]);
+  const [taxonomyDefaults, setTaxonomyDefaults] = useState<Map<string, boolean>>(new Map());
 
   // Form state
   const [formData, setFormData] = useState<Partial<Student>>({});
+  const [formDataInitialized, setFormDataInitialized] = useState(false);
 
-  const fetchTaxonomies = async () => {
-    // Fetch sex taxonomy
-    const { data: sexTaxonomy } = await supabase
-      .from("taxonomies")
-      .select("id")
-      .eq("key", "sex")
-      .single();
+  // Tab change handler: update URL without full reload
+  const handleTabChange = (value: string) => {
+    setActiveTab(value);
+    // Update URL query param without causing full page reload
+    const url = new URL(window.location.href);
+    url.searchParams.set("tab", value);
+    router.replace(url.pathname + url.search, { scroll: false });
+  };
 
-    if (sexTaxonomy) {
-      const { data: sexItems } = await supabase
-        .from("taxonomy_items")
-        .select("id, code, label")
-        .eq("taxonomy_id", sexTaxonomy.id)
-        .eq("is_active", true)
-        .order("sort_order", { ascending: true, nullsFirst: false })
-        .order("label", { ascending: true });
-      if (sexItems) setSexOptions(sexItems);
+  const fetchTaxonomies = async (currentFormData?: Partial<Student>) => {
+    // Use passed formData or fallback to state (explicit to avoid stale closure)
+    const dataToUse = currentFormData || formData;
+    
+    // Build current values map to include selected items even if inactive
+    // Map student column names (sex_id) to taxonomy keys ("sex")
+    const currentValues = new Map<string, string | null>();
+    // Explicitly coerce to string to avoid null/undefined mismatches
+    if (dataToUse.sex_id) currentValues.set(TAXONOMY_KEYS.sex, String(dataToUse.sex_id));
+    if (dataToUse.economic_status_id) currentValues.set(TAXONOMY_KEYS.economicStatus, String(dataToUse.economic_status_id));
+    if (dataToUse.primary_language_id) currentValues.set(TAXONOMY_KEYS.language, String(dataToUse.primary_language_id));
+    if (dataToUse.guardian_relationship_id) currentValues.set(TAXONOMY_KEYS.guardianRelationship, String(dataToUse.guardian_relationship_id));
+    if (dataToUse.status) currentValues.set(TAXONOMY_KEYS.studentStatus, String(dataToUse.status));
+    if (dataToUse.entry_type) currentValues.set(TAXONOMY_KEYS.entryType, String(dataToUse.entry_type));
+
+    // Use centralized helper with smart defaults and current values
+    const results = await fetchMultipleTaxonomies([
+      TAXONOMY_KEYS.sex,
+      TAXONOMY_KEYS.economicStatus,
+      TAXONOMY_KEYS.language,
+      TAXONOMY_KEYS.guardianRelationship,
+      TAXONOMY_KEYS.studentStatus,
+      TAXONOMY_KEYS.entryType,
+    ], currentValues);
+
+    // Set options and track which ones are using system defaults
+    const defaults = new Map<string, boolean>();
+    
+    const sexResult = results.get("sex");
+    if (sexResult) {
+      setSexOptions(sexResult.items);
+      defaults.set("sex", sexResult.hasSystemDefaults);
     }
 
-    // Fetch economic_status taxonomy
-    const { data: economicTaxonomy } = await supabase
-      .from("taxonomies")
-      .select("id")
-      .eq("key", "economic_status")
-      .single();
-
-    if (economicTaxonomy) {
-      const { data: economicItems } = await supabase
-        .from("taxonomy_items")
-        .select("id, code, label")
-        .eq("taxonomy_id", economicTaxonomy.id)
-        .eq("is_active", true)
-        .order("sort_order", { ascending: true, nullsFirst: false })
-        .order("label", { ascending: true });
-      if (economicItems) setEconomicStatusOptions(economicItems);
+    const languageResult = results.get("language");
+    if (languageResult) {
+      setLanguageOptions(languageResult.items);
+      defaults.set("language", languageResult.hasSystemDefaults);
+      
+      // DEV DEBUG: Log taxonomy options (remove after verification)
+      if (process.env.NODE_ENV === 'development') {
+        console.log('[DEV] Language options loaded:', {
+          count: languageResult.items.length,
+          ids: languageResult.items.map(item => item.id),
+          labels: languageResult.items.map(item => item.label),
+        });
+      }
+    }
+    
+    const economicResult = results.get("economic_status");
+    if (economicResult) {
+      setEconomicStatusOptions(economicResult.items);
+      defaults.set("economic_status", economicResult.hasSystemDefaults);
+      
+      // DEV DEBUG: Log taxonomy options (remove after verification)
+      if (process.env.NODE_ENV === 'development') {
+        console.log('[DEV] Economic status options loaded:', {
+          count: economicResult.items.length,
+          ids: economicResult.items.map(item => item.id),
+          labels: economicResult.items.map(item => item.label),
+        });
+      }
     }
 
-    // Fetch language taxonomy
-    const { data: languageTaxonomy } = await supabase
-      .from("taxonomies")
-      .select("id")
-      .eq("key", "primary_language")
-      .single();
-
-    if (languageTaxonomy) {
-      const { data: languageItems } = await supabase
-        .from("taxonomy_items")
-        .select("id, code, label")
-        .eq("taxonomy_id", languageTaxonomy.id)
-        .eq("is_active", true)
-        .order("sort_order", { ascending: true, nullsFirst: false })
-        .order("label", { ascending: true });
-      if (languageItems) setLanguageOptions(languageItems);
+    const relationshipResult = results.get("guardian_relationship");
+    if (relationshipResult) {
+      setRelationshipOptions(relationshipResult.items);
+      defaults.set("guardian_relationship", relationshipResult.hasSystemDefaults);
     }
 
-    // Fetch guardian_relationship taxonomy
-    const { data: relationshipTaxonomy } = await supabase
-      .from("taxonomies")
-      .select("id")
-      .eq("key", "guardian_relationship")
-      .single();
-
-    if (relationshipTaxonomy) {
-      const { data: relationshipItems } = await supabase
-        .from("taxonomy_items")
-        .select("id, code, label")
-        .eq("taxonomy_id", relationshipTaxonomy.id)
-        .eq("is_active", true)
-        .order("sort_order", { ascending: true, nullsFirst: false })
-        .order("label", { ascending: true });
-      if (relationshipItems) setRelationshipOptions(relationshipItems);
+    const statusResult = results.get("student_status");
+    if (statusResult) {
+      setStatusOptions(statusResult.items);
+      defaults.set("student_status", statusResult.hasSystemDefaults);
     }
+
+    const entryTypeResult = results.get("entry_type");
+    if (entryTypeResult) {
+      setEntryTypeOptions(entryTypeResult.items);
+      defaults.set("entry_type", entryTypeResult.hasSystemDefaults);
+    }
+
+    setTaxonomyDefaults(defaults);
   };
 
   useEffect(() => {
+    // Reset hydration guard when studentId changes
+    if (hydrationGuardRef.current !== studentId) {
+      hydrationGuardRef.current = null;
+      setFormDataInitialized(false);
+    }
+    
     const fetchData = async () => {
       if (!studentId) {
         setError("Student ID is required");
@@ -204,27 +227,45 @@ export default function StudentDetailPage() {
         return;
       }
 
-      // Fetch user role
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-      if (session) {
-        const { data: profile } = await supabase
-          .from("profiles")
-          .select("role")
-          .eq("id", session.user.id)
-          .single();
-        if (profile?.role) {
-          const normalizedRole = normalizeRole(profile.role);
-          setRole(normalizedRole);
-          setOriginalRole(profile.role);
+      // Fetch user role with error handling
+      try {
+        const {
+          data: { session },
+          error: sessionError,
+        } = await supabase.auth.getSession();
+        
+        if (sessionError) {
+          // If session error, log but continue (user might need to re-login)
+          console.warn("Session error:", sessionError);
+          // Default to read-only access
+          setRole("teacher");
+        } else if (session) {
+          const { data: profile, error: profileError } = await supabase
+            .from("profiles")
+            .select("role")
+            .eq("id", session.user.id)
+            .single();
+          
+          if (!profileError && profile?.role) {
+            const normalizedRole = normalizeRole(profile.role);
+            setRole(normalizedRole);
+            setOriginalRole(profile.role);
+          } else {
+            // Default to read-only if profile fetch fails
+            setRole("teacher");
+          }
+        } else {
+          // No session, default to read-only
+          setRole("teacher");
         }
+      } catch (authError) {
+        // Catch any unexpected auth errors
+        console.error("Auth error:", authError);
+        setRole("teacher"); // Default to read-only
       }
 
-      // Fetch taxonomies
-      await fetchTaxonomies();
-
       // Fetch student - try comprehensive fields first, fallback to legacy
+      // Note: Taxonomies will be fetched after formData is set (via useEffect)
       const { data: studentData, error: studentError } = await supabase
         .from("students")
         .select(`
@@ -233,7 +274,7 @@ export default function StudentDetailPage() {
           legal_last_name,
           preferred_name,
           date_of_birth,
-          sex,
+          sex_id,
           nationality,
           student_number,
           status,
@@ -243,12 +284,12 @@ export default function StudentDetailPage() {
           emergency_contact_name,
           emergency_contact_phone,
           guardian_name,
-          guardian_relationship,
+          guardian_relationship_id,
           guardian_email,
           guardian_phone,
           consent_flags,
-          economic_status,
-          primary_language,
+          economic_status_id,
+          primary_language_id,
           special_needs_flag,
           previous_school,
           entry_type,
@@ -286,7 +327,24 @@ export default function StudentDetailPage() {
               primary_email: legacyData.email,
             };
             setStudent(normalizedLegacy);
-            setFormData(normalizedLegacy);
+            
+            // ONE-TIME HYDRATION GUARD: Only initialize formData once per studentId
+            if (hydrationGuardRef.current !== studentId) {
+              // Apply smart defaults if fields are empty (sex requires explicit choice, no default)
+              const defaultedLegacy: Partial<Student> = {
+                ...normalizedLegacy,
+                status: normalizedLegacy.status || getSmartDefault("student_status") || "",
+                // sex: No default - requires explicit user choice
+              };
+              setFormData(defaultedLegacy);
+              setFormDataInitialized(true);
+              hydrationGuardRef.current = studentId;
+              
+              // Fetch taxonomies with explicit current values
+              setTimeout(() => {
+                fetchTaxonomies(defaultedLegacy);
+              }, 0);
+            }
             
             // Fetch admission if admission_id exists
             if (normalizedLegacy.admission_id) {
@@ -344,9 +402,57 @@ export default function StudentDetailPage() {
           legal_first_name: studentData.legal_first_name || studentData.first_name,
           legal_last_name: studentData.legal_last_name || studentData.last_name,
           primary_email: studentData.primary_email || studentData.email,
+          // Explicitly preserve taxonomy ID fields (can be null)
+          // Coerce to string to ensure consistency (null stays null, UUID becomes string)
+          sex_id: studentData.sex_id ? String(studentData.sex_id) : null,
+          economic_status_id: studentData.economic_status_id ? String(studentData.economic_status_id) : null,
+          primary_language_id: studentData.primary_language_id ? String(studentData.primary_language_id) : null,
+          guardian_relationship_id: studentData.guardian_relationship_id ? String(studentData.guardian_relationship_id) : null,
         };
         setStudent(normalizedStudent);
-        setFormData(normalizedStudent);
+        
+        // DEV DEBUG: Log fetched student data (remove after verification)
+        if (process.env.NODE_ENV === 'development') {
+          console.log('[DEV] Fetched student:', {
+            id: normalizedStudent.id,
+            sex_id: normalizedStudent.sex_id,
+            economic_status_id: normalizedStudent.economic_status_id,
+            primary_language_id: normalizedStudent.primary_language_id,
+            guardian_relationship_id: normalizedStudent.guardian_relationship_id,
+          });
+        }
+        
+        // ONE-TIME HYDRATION GUARD: Only initialize formData once per studentId
+        // This prevents overwriting formData on component remounts or re-renders
+        if (hydrationGuardRef.current !== studentId) {
+          // Apply smart defaults if fields are empty (sex requires explicit choice, no default)
+          // Preserve all fetched values including economic_status_id
+          const defaultedStudent: Partial<Student> = {
+            ...normalizedStudent,
+            status: normalizedStudent.status || getSmartDefault("student_status") || "",
+            // sex: No default - requires explicit user choice
+            // economic_status_id: Preserve fetched value (null or UUID string)
+          };
+          
+          // DEV DEBUG: Log formData initialization
+          if (process.env.NODE_ENV === 'development') {
+            console.log('[DEV] Initializing formData:', {
+              sex_id: defaultedStudent.sex_id,
+              economic_status_id: defaultedStudent.economic_status_id,
+              primary_language_id: defaultedStudent.primary_language_id,
+              guardian_relationship_id: defaultedStudent.guardian_relationship_id,
+            });
+          }
+          
+          setFormData(defaultedStudent);
+          setFormDataInitialized(true);
+          hydrationGuardRef.current = studentId;
+          
+          // Fetch taxonomies with explicit current values to avoid stale closure
+          setTimeout(() => {
+            fetchTaxonomies(defaultedStudent);
+          }, 0);
+        }
 
         // Fetch admission if admission_id exists
         if (normalizedStudent.admission_id) {
@@ -395,6 +501,24 @@ export default function StudentDetailPage() {
 
     fetchData();
   }, [studentId]);
+
+  // Fetch taxonomies when formData values change to ensure saved items (even if inactive) are included
+  // Pass explicit formData to avoid stale closure issues
+  useEffect(() => {
+    // Only refetch if formData has been initialized and has data
+    if (formDataInitialized && Object.keys(formData).length > 0) {
+      fetchTaxonomies(formData);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [formDataInitialized, formData.economic_status_id, formData.primary_language_id, formData.sex_id, formData.status, formData.entry_type, formData.guardian_relationship_id]);
+  
+  // Sync activeTab with URL on mount/URL change (for browser back/forward)
+  useEffect(() => {
+    const tabFromUrl = searchParams.get("tab") || "overview";
+    if (tabFromUrl !== activeTab) {
+      setActiveTab(tabFromUrl);
+    }
+  }, [searchParams]);
 
   const isMinor = (): boolean => {
     if (!formData.date_of_birth) return false;
@@ -446,7 +570,15 @@ export default function StudentDetailPage() {
       if (formData.legal_last_name !== undefined) updatePayload.legal_last_name = formData.legal_last_name || null;
       if (formData.preferred_name !== undefined) updatePayload.preferred_name = formData.preferred_name || null;
       if (formData.date_of_birth !== undefined) updatePayload.date_of_birth = formData.date_of_birth || null;
-      if (formData.sex !== undefined) updatePayload.sex = formData.sex || null;
+      // sex_id: Handle UUID string or null
+      if (formData.sex_id !== undefined) {
+        const sexId = formData.sex_id;
+        if (sexId && typeof sexId === "string" && sexId.trim() !== "") {
+          updatePayload.sex_id = sexId.trim();
+        } else {
+          updatePayload.sex_id = null;
+        }
+      }
       if (formData.nationality !== undefined) updatePayload.nationality = formData.nationality || null;
       if (formData.status !== undefined) updatePayload.status = formData.status || null;
     } else if (tab === "contact") {
@@ -457,18 +589,51 @@ export default function StudentDetailPage() {
       if (formData.emergency_contact_phone !== undefined) updatePayload.emergency_contact_phone = formData.emergency_contact_phone || null;
     } else if (tab === "guardians") {
       if (formData.guardian_name !== undefined) updatePayload.guardian_name = formData.guardian_name || null;
-      if (formData.guardian_relationship !== undefined) updatePayload.guardian_relationship = formData.guardian_relationship || null;
+      // guardian_relationship_id: Handle UUID string or null
+      if (formData.guardian_relationship_id !== undefined) {
+        const guardianRelationshipId = formData.guardian_relationship_id;
+        if (guardianRelationshipId && typeof guardianRelationshipId === "string" && guardianRelationshipId.trim() !== "") {
+          updatePayload.guardian_relationship_id = guardianRelationshipId.trim();
+        } else {
+          updatePayload.guardian_relationship_id = null;
+        }
+      }
       if (formData.guardian_email !== undefined) updatePayload.guardian_email = formData.guardian_email || null;
       if (formData.guardian_phone !== undefined) updatePayload.guardian_phone = formData.guardian_phone || null;
       if (formData.consent_flags !== undefined) updatePayload.consent_flags = formData.consent_flags || null;
     } else if (tab === "demographics") {
-      if (formData.economic_status !== undefined) updatePayload.economic_status = formData.economic_status || null;
-      if (formData.primary_language !== undefined) updatePayload.primary_language = formData.primary_language || null;
+      // Economic status is optional - explicitly handle null and UUID values
+      // Always include economic_status_id in payload if it exists in formData (even if null)
+      if (formData.economic_status_id !== undefined) {
+        const economicStatusId = formData.economic_status_id;
+        // Allow null or valid UUID string - explicitly set null if empty/whitespace
+        if (economicStatusId && typeof economicStatusId === "string" && economicStatusId.trim() !== "") {
+          updatePayload.economic_status_id = economicStatusId.trim();
+        } else {
+          // Explicitly set to null (user cleared selection or value was null)
+          updatePayload.economic_status_id = null;
+        }
+      }
+      if (formData.primary_language_id !== undefined) {
+        const primaryLanguageId = formData.primary_language_id;
+        if (primaryLanguageId && typeof primaryLanguageId === "string" && primaryLanguageId.trim() !== "") {
+          updatePayload.primary_language_id = primaryLanguageId.trim();
+        } else {
+          updatePayload.primary_language_id = null;
+        }
+      }
       if (formData.special_needs_flag !== undefined) updatePayload.special_needs_flag = formData.special_needs_flag || null;
     } else if (tab === "education") {
       if (formData.previous_school !== undefined) updatePayload.previous_school = formData.previous_school || null;
       if (formData.entry_type !== undefined) updatePayload.entry_type = formData.entry_type || null;
       if (formData.notes !== undefined) updatePayload.notes = formData.notes || null;
+    }
+
+    // Ensure we have fields to update
+    if (Object.keys(updatePayload).length === 0) {
+      setError("No changes to save.");
+      setSaving(false);
+      return;
     }
 
     const { error: updateError } = await supabase
@@ -478,15 +643,48 @@ export default function StudentDetailPage() {
 
     if (updateError) {
       console.error("Error updating student:", updateError);
-      setError(updateError.message || "Failed to save changes.");
+      console.error("Update payload:", updatePayload);
+      const errorMessage = updateError.message || updateError.details || JSON.stringify(updateError) || "Failed to save changes.";
+      setError(errorMessage);
       setSaving(false);
       return;
     }
 
-    // Refresh student data
+    // Refresh student data with explicit field selection to ensure all taxonomy IDs are included
     const { data: updatedStudent } = await supabase
       .from("students")
-      .select("*")
+      .select(`
+        id,
+        legal_first_name,
+        legal_last_name,
+        preferred_name,
+        date_of_birth,
+        sex_id,
+        nationality,
+        student_number,
+        status,
+        primary_email,
+        phone,
+        address,
+        emergency_contact_name,
+        emergency_contact_phone,
+        guardian_name,
+        guardian_relationship_id,
+        guardian_email,
+        guardian_phone,
+        consent_flags,
+        economic_status_id,
+        primary_language_id,
+        special_needs_flag,
+        previous_school,
+        entry_type,
+        notes,
+        admission_id,
+        created_at,
+        first_name,
+        last_name,
+        email
+      `)
       .eq("id", studentId)
       .single();
 
@@ -496,9 +694,29 @@ export default function StudentDetailPage() {
         legal_first_name: updatedStudent.legal_first_name || updatedStudent.first_name,
         legal_last_name: updatedStudent.legal_last_name || updatedStudent.last_name,
         primary_email: updatedStudent.primary_email || updatedStudent.email,
+        // Explicitly preserve taxonomy ID fields (can be null)
+        // Coerce to string to ensure consistency
+        sex_id: updatedStudent.sex_id ? String(updatedStudent.sex_id) : null,
+        economic_status_id: updatedStudent.economic_status_id ? String(updatedStudent.economic_status_id) : null,
+        primary_language_id: updatedStudent.primary_language_id ? String(updatedStudent.primary_language_id) : null,
+        guardian_relationship_id: updatedStudent.guardian_relationship_id ? String(updatedStudent.guardian_relationship_id) : null,
       };
       setStudent(normalizedStudent);
-      setFormData(normalizedStudent);
+      // After save: merge updated values with existing formData to preserve unsaved changes in other tabs
+      // Only update fields that were saved, don't overwrite entire formData
+      setFormData((prevFormData) => {
+        const mergedData: Partial<Student> = {
+          ...prevFormData, // Preserve unsaved changes
+          ...normalizedStudent, // Override with saved values
+          status: normalizedStudent.status || getSmartDefault("student_status") || prevFormData.status || "",
+        };
+        // Refetch taxonomies with updated values
+        setTimeout(() => {
+          fetchTaxonomies(mergedData);
+        }, 0);
+        return mergedData;
+      });
+      setFormDataInitialized(true);
     }
 
     setSaving(false);
@@ -619,14 +837,16 @@ export default function StudentDetailPage() {
         </Card>
       )}
 
-      <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-        <TabsList className="grid w-full grid-cols-6">
+
+      <Tabs value={activeTab} onValueChange={handleTabChange} className="w-full">
+        <TabsList className="grid w-full grid-cols-7">
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="identity">Identity</TabsTrigger>
           <TabsTrigger value="contact">Contact</TabsTrigger>
           <TabsTrigger value="guardians">Guardians</TabsTrigger>
           <TabsTrigger value="demographics">Demographics</TabsTrigger>
           <TabsTrigger value="education">Education</TabsTrigger>
+          <TabsTrigger value="documents">Documents</TabsTrigger>
         </TabsList>
 
         {/* Overview Tab */}
@@ -757,23 +977,38 @@ export default function StudentDetailPage() {
                 />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="sex">Sex</Label>
+                <Label htmlFor="sex_id">Sex *</Label>
                 <Select
-                  value={formData.sex || ""}
-                  onValueChange={(value) => setFormData({ ...formData, sex: value })}
+                  value={formData.sex_id ? String(formData.sex_id) : ""}
+                  onValueChange={(value) => setFormData({ ...formData, sex_id: value || null })}
                   disabled={!canEdit || isWithdrawn()}
+                  required
                 >
                   <SelectTrigger>
                     <SelectValue placeholder="Select sex" />
                   </SelectTrigger>
                   <SelectContent>
-                    {sexOptions.map((item) => (
-                      <SelectItem key={item.id} value={item.code}>
-                        {item.label}
-                      </SelectItem>
-                    ))}
+                    {sexOptions.length === 0 ? (
+                      <div className="px-2 py-1.5 text-sm text-muted-foreground">No options configured</div>
+                    ) : (
+                      sexOptions.map((item) => (
+                        <SelectItem key={item.id} value={item.id}>
+                          {item.label}
+                        </SelectItem>
+                      ))
+                    )}
                   </SelectContent>
                 </Select>
+                {formData.sex_id && !sexOptions.some(item => item.id === formData.sex_id) && (
+                  <p className="text-xs text-yellow-600">
+                    Value no longer supported — please update
+                  </p>
+                )}
+                {taxonomyDefaults.has(TAXONOMY_KEYS.sex) && taxonomyDefaults.get(TAXONOMY_KEYS.sex) && (
+                  <p className="text-xs text-muted-foreground">
+                    Using system defaults. You can customize this later in Settings → Taxonomies.
+                  </p>
+                )}
               </div>
               <div className="space-y-2">
                 <Label htmlFor="nationality">Nationality</Label>
@@ -797,21 +1032,26 @@ export default function StudentDetailPage() {
               <div className="space-y-2">
                 <Label htmlFor="status">Status</Label>
                 <Select
-                  value={formData.status || "active"}
+                  value={formData.status || getSmartDefault("student_status") || ""}
                   onValueChange={(value) => setFormData({ ...formData, status: value })}
                   disabled={!canEdit || isWithdrawn()}
                 >
                   <SelectTrigger>
-                    <SelectValue />
+                    <SelectValue placeholder="Select status" />
                   </SelectTrigger>
                   <SelectContent>
-                    {statusOptions.map((option) => (
-                      <SelectItem key={option.value} value={option.value}>
-                        {option.label}
+                    {statusOptions.map((item) => (
+                      <SelectItem key={item.id} value={item.code}>
+                        {item.label}
                       </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
+                {taxonomyDefaults.has("student_status") && taxonomyDefaults.get("student_status") && (
+                  <p className="text-xs text-muted-foreground">
+                    Using system defaults. You can customize this later in Settings → Taxonomies.
+                  </p>
+                )}
               </div>
               {canEdit && !isWithdrawn() && (
                 <div className="flex justify-end pt-4">
@@ -934,23 +1174,32 @@ export default function StudentDetailPage() {
                 />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="guardian_relationship">Relationship</Label>
+                <Label htmlFor="guardian_relationship_id">Relationship</Label>
                 <Select
-                  value={formData.guardian_relationship || ""}
-                  onValueChange={(value) => setFormData({ ...formData, guardian_relationship: value })}
+                  value={formData.guardian_relationship_id ? String(formData.guardian_relationship_id) : ""}
+                  onValueChange={(value) => setFormData({ ...formData, guardian_relationship_id: value || null })}
                   disabled={!canEdit || isWithdrawn()}
                 >
                   <SelectTrigger>
                     <SelectValue placeholder="Select relationship" />
                   </SelectTrigger>
                   <SelectContent>
-                    {relationshipOptions.map((item) => (
-                      <SelectItem key={item.id} value={item.code}>
-                        {item.label}
-                      </SelectItem>
-                    ))}
+                    {relationshipOptions.length === 0 ? (
+                      <div className="px-2 py-1.5 text-sm text-muted-foreground">No options configured</div>
+                    ) : (
+                      relationshipOptions.map((item) => (
+                        <SelectItem key={item.id} value={item.id}>
+                          {item.label}
+                        </SelectItem>
+                      ))
+                    )}
                   </SelectContent>
                 </Select>
+                {taxonomyDefaults.has(TAXONOMY_KEYS.guardianRelationship) && taxonomyDefaults.get(TAXONOMY_KEYS.guardianRelationship) && (
+                  <p className="text-xs text-muted-foreground">
+                    Using system defaults. You can customize this later in Settings → Taxonomies.
+                  </p>
+                )}
               </div>
               <div className="space-y-2">
                 <Label htmlFor="guardian_email">Guardian Email</Label>
@@ -1022,42 +1271,85 @@ export default function StudentDetailPage() {
                 </div>
               )}
               <div className="space-y-2">
-                <Label htmlFor="economic_status">Economic Status</Label>
+                <Label htmlFor="economic_status_id">Economic Status</Label>
                 <Select
-                  value={formData.economic_status || ""}
-                  onValueChange={(value) => setFormData({ ...formData, economic_status: value })}
+                  value={formData.economic_status_id ? String(formData.economic_status_id) : ""}
+                  onValueChange={(value) => {
+                    // DEV DEBUG: Log Select value change
+                    if (process.env.NODE_ENV === 'development') {
+                      console.log('[DEV] Economic status Select onChange:', {
+                        newValue: value,
+                        formDataValue: formData.economic_status_id,
+                      });
+                    }
+                    setFormData({ ...formData, economic_status_id: value || null });
+                  }}
                   disabled={!canEdit || isWithdrawn() || isLegacy()}
                 >
                   <SelectTrigger>
-                    <SelectValue placeholder="Select economic status" />
+                    <SelectValue placeholder="Select economic status (optional)" />
                   </SelectTrigger>
                   <SelectContent>
-                    {economicStatusOptions.map((item) => (
-                      <SelectItem key={item.id} value={item.code}>
-                        {item.label}
-                      </SelectItem>
-                    ))}
+                    {economicStatusOptions.length === 0 ? (
+                      <div className="px-2 py-1.5 text-sm text-muted-foreground">No options configured</div>
+                    ) : (
+                      economicStatusOptions.map((item) => (
+                        <SelectItem key={item.id} value={item.id}>
+                          {item.label}
+                        </SelectItem>
+                      ))
+                    )}
                   </SelectContent>
                 </Select>
+                {/* DEV DEBUG: Log Select render state */}
+                {process.env.NODE_ENV === 'development' && (
+                  <div className="text-xs text-muted-foreground mt-1">
+                    [DEV] Select value: {formData.economic_status_id || 'null'} | Options: {economicStatusOptions.length}
+                  </div>
+                )}
               </div>
               <div className="space-y-2">
-                <Label htmlFor="primary_language">Primary Language</Label>
+                <Label htmlFor="primary_language_id">Primary Language</Label>
                 <Select
-                  value={formData.primary_language || ""}
-                  onValueChange={(value) => setFormData({ ...formData, primary_language: value })}
+                  value={formData.primary_language_id ? String(formData.primary_language_id) : ""}
+                  onValueChange={(value) => {
+                    // DEV DEBUG: Log Select value change
+                    if (process.env.NODE_ENV === 'development') {
+                      console.log('[DEV] Primary language Select onChange:', {
+                        newValue: value,
+                        formDataValue: formData.primary_language_id,
+                      });
+                    }
+                    setFormData({ ...formData, primary_language_id: value || null });
+                  }}
                   disabled={!canEdit || isWithdrawn() || isLegacy()}
                 >
                   <SelectTrigger>
                     <SelectValue placeholder="Select language" />
                   </SelectTrigger>
                   <SelectContent>
-                    {languageOptions.map((item) => (
-                      <SelectItem key={item.id} value={item.code}>
-                        {item.label}
-                      </SelectItem>
-                    ))}
+                    {languageOptions.length === 0 ? (
+                      <div className="px-2 py-1.5 text-sm text-muted-foreground">No options configured</div>
+                    ) : (
+                      languageOptions.map((item) => (
+                        <SelectItem key={item.id} value={item.id}>
+                          {item.label}
+                        </SelectItem>
+                      ))
+                    )}
                   </SelectContent>
                 </Select>
+                {/* DEV DEBUG: Log Select render state */}
+                {process.env.NODE_ENV === 'development' && (
+                  <div className="text-xs text-muted-foreground mt-1">
+                    [DEV] Select value: {formData.primary_language_id || 'null'} | Options: {languageOptions.length}
+                  </div>
+                )}
+                {taxonomyDefaults.has("language") && taxonomyDefaults.get("language") && (
+                  <p className="text-xs text-muted-foreground">
+                    Using system defaults. You can customize this later in Settings → Taxonomies.
+                  </p>
+                )}
               </div>
               <div className="flex items-center space-x-2">
                 <Switch
@@ -1118,13 +1410,18 @@ export default function StudentDetailPage() {
                     <SelectValue placeholder="Select entry type" />
                   </SelectTrigger>
                   <SelectContent>
-                    {entryTypeOptions.map((option) => (
-                      <SelectItem key={option.value} value={option.value}>
-                        {option.label}
+                    {entryTypeOptions.map((item) => (
+                      <SelectItem key={item.id} value={item.code}>
+                        {item.label}
                       </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
+                {taxonomyDefaults.has("entry_type") && taxonomyDefaults.get("entry_type") && (
+                  <p className="text-xs text-muted-foreground">
+                    Using system defaults. You can customize this later in Settings → Taxonomies.
+                  </p>
+                )}
               </div>
               <div className="space-y-2">
                 <Label htmlFor="notes">Notes</Label>
@@ -1154,6 +1451,21 @@ export default function StudentDetailPage() {
                   </Button>
                 </div>
               )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* Documents Tab */}
+        <TabsContent value="documents" className="space-y-4">
+          <Card>
+            <CardHeader>
+              <CardTitle>Documents</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="text-center py-8 text-muted-foreground">
+                <p className="text-sm">Document management will be available in a future release.</p>
+                <p className="text-xs mt-2">This section will support compliance-safe document storage and tracking.</p>
+              </div>
             </CardContent>
           </Card>
         </TabsContent>

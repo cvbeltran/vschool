@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, ReactElement } from "react";
 import { supabase } from "@/lib/supabase/client";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -515,7 +515,7 @@ export default function AdmissionsPage() {
   };
 
   const getStatusBadge = (status: string) => {
-    const statusConfig: Record<string, { color: string; icon: JSX.Element; label: string }> = {
+    const statusConfig: Record<string, { color: string; icon: ReactElement; label: string }> = {
       pending: {
         color: "text-yellow-600",
         icon: <Clock className="size-3" />,
