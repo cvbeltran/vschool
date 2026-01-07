@@ -17,7 +17,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { ArrowLeft, Save, AlertCircle, Loader2 } from "lucide-react";
+import { ArrowLeft, Save, AlertCircle, Loader2, RefreshCw } from "lucide-react";
 import { normalizeRole, canPerform } from "@/lib/rbac";
 import { Badge } from "@/components/ui/badge";
 import { fetchMultipleTaxonomies, getSmartDefault, type TaxonomyItem, type TaxonomyFetchResult } from "@/lib/taxonomies";
@@ -32,6 +32,7 @@ interface Student {
   sex_id?: string | null; // FK to taxonomy_items.id (taxonomy key: "sex")
   nationality?: string | null;
   student_number?: string | null;
+  student_lrn?: string | null; // Learner Reference Number (LRN)
   status?: string | null; // FK to taxonomy_items.id (taxonomy key: "student_status")
   primary_email?: string | null;
   phone?: string | null;
@@ -302,6 +303,8 @@ export default function StudentDetailPage() {
           date_of_birth,
           sex_id,
           nationality,
+          student_number,
+          student_lrn,
           status,
           primary_email,
           phone,
@@ -593,6 +596,68 @@ export default function StudentDetailPage() {
 
   const canEdit = canPerform(role, "update", "students", originalRole);
 
+  const generateStudentNumber = async () => {
+    if (!canEdit || isWithdrawn()) return;
+
+    try {
+      // Get current year for prefix
+      const currentYear = new Date().getFullYear();
+      
+      // Fetch existing student numbers to find the next available number
+      const { data: existingStudents, error: fetchError } = await supabase
+        .from("students")
+        .select("student_number")
+        .not("student_number", "is", null)
+        .like("student_number", `${currentYear}-%`)
+        .order("student_number", { ascending: false })
+        .limit(1);
+
+      if (fetchError) {
+        console.error("Error fetching existing student numbers:", fetchError);
+        // Fallback: generate based on timestamp if fetch fails
+        const timestamp = Date.now().toString().slice(-6);
+        const generatedNumber = `${currentYear}-${timestamp}`;
+        setFormData({ ...formData, student_number: generatedNumber });
+        return;
+      }
+
+      // Find the next sequential number
+      let nextNumber = 1;
+      if (existingStudents && existingStudents.length > 0) {
+        const lastNumber = existingStudents[0].student_number;
+        const match = lastNumber.match(/-(\d+)$/);
+        if (match) {
+          nextNumber = parseInt(match[1], 10) + 1;
+        }
+      }
+
+      // Format: YYYY-XXXXX (5 digits, zero-padded)
+      const generatedNumber = `${currentYear}-${nextNumber.toString().padStart(5, "0")}`;
+      
+      // Check if this number already exists (race condition protection)
+      const { data: checkExisting } = await supabase
+        .from("students")
+        .select("id")
+        .eq("student_number", generatedNumber)
+        .maybeSingle();
+
+      if (checkExisting && checkExisting.id !== studentId) {
+        // If exists, increment and try again
+        const fallbackNumber = `${currentYear}-${(nextNumber + 1).toString().padStart(5, "0")}`;
+        setFormData({ ...formData, student_number: fallbackNumber });
+      } else {
+        setFormData({ ...formData, student_number: generatedNumber });
+      }
+    } catch (error) {
+      console.error("Error generating student number:", error);
+      // Fallback: generate based on timestamp
+      const currentYear = new Date().getFullYear();
+      const timestamp = Date.now().toString().slice(-6);
+      const generatedNumber = `${currentYear}-${timestamp}`;
+      setFormData({ ...formData, student_number: generatedNumber });
+    }
+  };
+
   const handleSave = async (tab: string) => {
     if (!canEdit) {
       setError("You do not have permission to edit student records.");
@@ -641,6 +706,8 @@ export default function StudentDetailPage() {
         }
       }
       if (formData.nationality !== undefined) updatePayload.nationality = formData.nationality || null;
+      if (formData.student_number !== undefined) updatePayload.student_number = formData.student_number || null;
+      if (formData.student_lrn !== undefined) updatePayload.student_lrn = formData.student_lrn || null;
       if (formData.status !== undefined) updatePayload.status = formData.status || null;
     } else if (tab === "contact") {
       if (formData.primary_email !== undefined) updatePayload.primary_email = formData.primary_email || null;
@@ -738,6 +805,8 @@ export default function StudentDetailPage() {
         date_of_birth,
         sex_id,
         nationality,
+        student_number,
+        student_lrn,
         status,
         primary_email,
         phone,
@@ -1102,13 +1171,41 @@ export default function StudentDetailPage() {
               </div>
               <div className="space-y-2">
                 <Label htmlFor="student_number">Student Number</Label>
+                <div className="flex gap-2">
+                  <Input
+                    id="student_number"
+                    value={formData.student_number || ""}
+                    onChange={(e) => setFormData({ ...formData, student_number: e.target.value })}
+                    disabled={!canEdit || isWithdrawn()}
+                    placeholder="Enter student number or click Generate"
+                    className="flex-1"
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="icon"
+                    onClick={generateStudentNumber}
+                    disabled={!canEdit || isWithdrawn()}
+                    title="Generate student number"
+                  >
+                    <RefreshCw className="size-4" />
+                  </Button>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Format: YYYY-XXXXX (e.g., 2024-00001). Click the generate button to auto-generate.
+                </p>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="student_lrn">Learner Reference Number (LRN)</Label>
                 <Input
-                  id="student_number"
-                  value={formData.student_number || ""}
-                  disabled
-                  className="bg-muted"
+                  id="student_lrn"
+                  value={formData.student_lrn || ""}
+                  onChange={(e) => setFormData({ ...formData, student_lrn: e.target.value })}
+                  disabled={!canEdit || isWithdrawn()}
+                  placeholder="Enter 12-digit LRN"
+                  maxLength={12}
                 />
-                <p className="text-xs text-muted-foreground">System-generated, read-only</p>
+                <p className="text-xs text-muted-foreground">12-digit Learner Reference Number</p>
               </div>
               <div className="space-y-2">
                 <Label htmlFor="status">Status</Label>
