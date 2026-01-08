@@ -511,6 +511,51 @@ export default function StudentDetailPage() {
           fetchTaxonomies(defaultedStudent);
         }, 0);
 
+        // Fetch guardian data from new guardians table
+        const { data: guardianRelationships } = await supabase
+          .from("student_guardians")
+          .select(`
+            id,
+            relationship_id,
+            is_primary,
+            consent_flags,
+            guardian:guardians(
+              id,
+              name,
+              email,
+              phone
+            )
+          `)
+          .eq("student_id", studentId)
+          .order("is_primary", { ascending: false })
+          .limit(1); // Get primary guardian for now
+
+        if (guardianRelationships && guardianRelationships.length > 0) {
+          const primaryGuardianRel = guardianRelationships[0];
+          const guardian = primaryGuardianRel.guardian as any;
+          if (guardian) {
+            // Update formData with guardian data from new table
+            defaultedStudent.guardian_name = guardian.name;
+            defaultedStudent.guardian_email = guardian.email;
+            defaultedStudent.guardian_phone = guardian.phone;
+            defaultedStudent.guardian_relationship_id = primaryGuardianRel.relationship_id 
+              ? String(primaryGuardianRel.relationship_id).trim() 
+              : null;
+            defaultedStudent.consent_flags = primaryGuardianRel.consent_flags;
+            // Update normalizedStudent as well for consistency
+            normalizedStudent.guardian_name = guardian.name;
+            normalizedStudent.guardian_email = guardian.email;
+            normalizedStudent.guardian_phone = guardian.phone;
+            normalizedStudent.guardian_relationship_id = primaryGuardianRel.relationship_id 
+              ? String(primaryGuardianRel.relationship_id).trim() 
+              : null;
+            normalizedStudent.consent_flags = primaryGuardianRel.consent_flags;
+          }
+        } else {
+          // Fallback to legacy guardian columns if no guardian relationship exists
+          // This maintains backward compatibility
+        }
+
         // Fetch admission if admission_id exists
         if (normalizedStudent.admission_id) {
           const { data: admissionData, error: admissionError } = await supabase
@@ -672,7 +717,8 @@ export default function StudentDetailPage() {
     // Validate guardian for minors
     if (isMinor() && tab === "guardians") {
       if (!formData.guardian_name || !formData.guardian_phone) {
-        setError("Guardian information is required for students under 18.");
+        setError("Guardian name and phone are required for students under 18.");
+        setSaving(false);
         return;
       }
     }
@@ -716,24 +762,166 @@ export default function StudentDetailPage() {
       if (formData.emergency_contact_name !== undefined) updatePayload.emergency_contact_name = formData.emergency_contact_name || null;
       if (formData.emergency_contact_phone !== undefined) updatePayload.emergency_contact_phone = formData.emergency_contact_phone || null;
     } else if (tab === "guardians") {
-      if (formData.guardian_name !== undefined) updatePayload.guardian_name = formData.guardian_name || null;
-      // guardian_relationship_id: Handle UUID string or null - reject system default IDs
-      if (formData.guardian_relationship_id !== undefined) {
-        const guardianRelationshipId = formData.guardian_relationship_id;
-        if (guardianRelationshipId && typeof guardianRelationshipId === "string" && guardianRelationshipId.trim() !== "") {
-          // Only save if it's a valid UUID (not a system default)
-          if (isValidUUID(guardianRelationshipId.trim())) {
-            updatePayload.guardian_relationship_id = guardianRelationshipId.trim();
-          } else {
-            updatePayload.guardian_relationship_id = null;
+      // Save guardian using new guardians table structure
+      if (formData.guardian_name !== undefined && formData.guardian_name) {
+        // Check if guardian already exists for this student
+        const { data: existingRelationships } = await supabase
+          .from("student_guardians")
+          .select(`
+            id,
+            guardian_id,
+            guardian:guardians(id, name, email, phone)
+          `)
+          .eq("student_id", studentId)
+          .eq("is_primary", true)
+          .limit(1);
+
+        let guardianId: string | null = null;
+        let existingRelationshipId: string | null = null;
+
+        if (existingRelationships && existingRelationships.length > 0) {
+          const existingRel = existingRelationships[0];
+          existingRelationshipId = existingRel.id;
+          const existingGuardian = existingRel.guardian as any;
+          if (existingGuardian) {
+            guardianId = existingGuardian.id;
+          }
+        }
+
+        if (guardianId && existingRelationshipId) {
+          // Update existing guardian
+          
+          const { error: updateGuardianError } = await supabase
+            .from("guardians")
+            .update({
+              name: formData.guardian_name,
+              email: formData.guardian_email || null,
+              phone: formData.guardian_phone || null,
+            })
+            .eq("id", guardianId);
+
+          if (updateGuardianError) {
+            console.error("Error updating guardian:", updateGuardianError);
+            setError(updateGuardianError.message || "Failed to update guardian.");
+            setSaving(false);
+            return;
+          }
+
+          // Update student_guardians relationship
+          const relationshipId = formData.guardian_relationship_id && isValidUUID(formData.guardian_relationship_id.trim())
+            ? formData.guardian_relationship_id.trim()
+            : null;
+
+          const { error: updateRelError } = await supabase
+            .from("student_guardians")
+            .update({
+              relationship_id: relationshipId,
+              consent_flags: formData.consent_flags || null,
+            })
+            .eq("id", existingRelationshipId);
+
+          if (updateRelError) {
+            console.error("Error updating student_guardian relationship:", updateRelError);
+            setError(updateRelError.message || "Failed to update guardian relationship.");
+            setSaving(false);
+            return;
           }
         } else {
-          updatePayload.guardian_relationship_id = null;
+          // Check if a guardian with the same email already exists (email is primary identifier)
+          let existingGuardian = null;
+          
+          if (formData.guardian_email && formData.guardian_email.trim() !== "") {
+            // Primary check: Look for guardian by email (most reliable identifier)
+            const { data: existingGuardiansByEmail } = await supabase
+              .from("guardians")
+              .select("id, name, email, phone")
+              .eq("email", formData.guardian_email.trim())
+              .limit(1);
+            
+            if (existingGuardiansByEmail && existingGuardiansByEmail.length > 0) {
+              existingGuardian = existingGuardiansByEmail[0];
+              guardianId = existingGuardian.id;
+            }
+          }
+          
+          // Fallback: If no email match and no email provided, check by name and phone
+          if (!guardianId && !formData.guardian_email) {
+            let guardianQuery = supabase
+              .from("guardians")
+              .select("id, name, email, phone")
+              .eq("name", formData.guardian_name)
+              .is("email", null);
+            
+            if (formData.guardian_phone) {
+              guardianQuery = guardianQuery.eq("phone", formData.guardian_phone);
+            } else {
+              guardianQuery = guardianQuery.is("phone", null);
+            }
+            
+            const { data: existingGuardiansByName } = await guardianQuery.limit(1);
+            if (existingGuardiansByName && existingGuardiansByName.length > 0) {
+              existingGuardian = existingGuardiansByName[0];
+              guardianId = existingGuardian.id;
+            }
+          }
+
+          if (!guardianId) {
+            // Create new guardian
+            const { data: newGuardian, error: createGuardianError } = await supabase
+              .from("guardians")
+              .insert({
+                name: formData.guardian_name,
+                email: formData.guardian_email || null,
+                phone: formData.guardian_phone || null,
+              })
+              .select()
+              .single();
+
+            if (createGuardianError) {
+              console.error("Error creating guardian:", createGuardianError);
+              setError(createGuardianError.message || "Failed to create guardian.");
+              setSaving(false);
+              return;
+            }
+
+            guardianId = newGuardian.id;
+          }
+
+          // Create student_guardian relationship
+          const relationshipId = formData.guardian_relationship_id && isValidUUID(formData.guardian_relationship_id.trim())
+            ? formData.guardian_relationship_id.trim()
+            : null;
+
+          const { error: createRelError } = await supabase
+            .from("student_guardians")
+            .insert({
+              student_id: studentId,
+              guardian_id: guardianId,
+              relationship_id: relationshipId,
+              is_primary: true,
+              consent_flags: formData.consent_flags || null,
+            });
+
+          if (createRelError) {
+            console.error("Error creating student_guardian relationship:", createRelError);
+            setError(createRelError.message || "Failed to link guardian to student.");
+            setSaving(false);
+            return;
+          }
+        }
+      } else if (formData.guardian_name === "" || formData.guardian_name === null) {
+        // Remove guardian relationship if name is cleared
+        const { error: deleteRelError } = await supabase
+          .from("student_guardians")
+          .delete()
+          .eq("student_id", studentId)
+          .eq("is_primary", true);
+
+        if (deleteRelError) {
+          console.error("Error removing guardian relationship:", deleteRelError);
+          // Don't fail the save if removal fails, just log it
         }
       }
-      if (formData.guardian_email !== undefined) updatePayload.guardian_email = formData.guardian_email || null;
-      if (formData.guardian_phone !== undefined) updatePayload.guardian_phone = formData.guardian_phone || null;
-      if (formData.consent_flags !== undefined) updatePayload.consent_flags = formData.consent_flags || null;
     } else if (tab === "demographics") {
       // Economic status is optional - explicitly handle null and UUID values
       // Always include economic_status_id in payload if it exists in formData (even if null)
@@ -770,6 +958,61 @@ export default function StudentDetailPage() {
       if (formData.previous_school !== undefined) updatePayload.previous_school = formData.previous_school || null;
       if (formData.entry_type !== undefined) updatePayload.entry_type = formData.entry_type || null;
       if (formData.notes !== undefined) updatePayload.notes = formData.notes || null;
+    }
+
+    // For guardians tab, we handle it separately above, so skip student table update
+    if (tab === "guardians") {
+      // Guardian data is already saved above, now refresh the data
+      // Fetch guardian data from new guardians table
+      const { data: guardianRelationships } = await supabase
+        .from("student_guardians")
+        .select(`
+          id,
+          relationship_id,
+          is_primary,
+          consent_flags,
+          guardian:guardians(
+            id,
+            name,
+            email,
+            phone
+          )
+        `)
+        .eq("student_id", studentId)
+        .order("is_primary", { ascending: false })
+        .limit(1);
+
+      if (guardianRelationships && guardianRelationships.length > 0) {
+        const primaryGuardianRel = guardianRelationships[0];
+        const guardian = primaryGuardianRel.guardian as any;
+        if (guardian) {
+          // Update formData with guardian data from new table
+          setFormData((prevFormData) => ({
+            ...prevFormData,
+            guardian_name: guardian.name,
+            guardian_email: guardian.email,
+            guardian_phone: guardian.phone,
+            guardian_relationship_id: primaryGuardianRel.relationship_id 
+              ? String(primaryGuardianRel.relationship_id).trim() 
+              : null,
+            consent_flags: primaryGuardianRel.consent_flags,
+          }));
+        }
+      } else {
+        // Clear guardian data if no relationship exists
+        setFormData((prevFormData) => ({
+          ...prevFormData,
+          guardian_name: null,
+          guardian_email: null,
+          guardian_phone: null,
+          guardian_relationship_id: null,
+          consent_flags: null,
+        }));
+      }
+
+      setSaving(false);
+      setError(null);
+      return;
     }
 
     // Ensure we have fields to update
@@ -834,6 +1077,25 @@ export default function StudentDetailPage() {
       .single();
 
     if (updatedStudent) {
+      // Fetch guardian data from new guardians table
+      const { data: guardianRelationships } = await supabase
+        .from("student_guardians")
+        .select(`
+          id,
+          relationship_id,
+          is_primary,
+          consent_flags,
+          guardian:guardians(
+            id,
+            name,
+            email,
+            phone
+          )
+        `)
+        .eq("student_id", studentId)
+        .order("is_primary", { ascending: false })
+        .limit(1);
+
       const normalizedStudent: Student = {
         ...updatedStudent,
         legal_first_name: updatedStudent.legal_first_name || updatedStudent.first_name,
@@ -846,6 +1108,22 @@ export default function StudentDetailPage() {
         primary_language_id: updatedStudent.primary_language_id ? String(updatedStudent.primary_language_id).trim() : null,
         guardian_relationship_id: updatedStudent.guardian_relationship_id ? String(updatedStudent.guardian_relationship_id).trim() : null,
       };
+
+      // Override guardian fields with data from new table if available
+      if (guardianRelationships && guardianRelationships.length > 0) {
+        const primaryGuardianRel = guardianRelationships[0];
+        const guardian = primaryGuardianRel.guardian as any;
+        if (guardian) {
+          normalizedStudent.guardian_name = guardian.name;
+          normalizedStudent.guardian_email = guardian.email;
+          normalizedStudent.guardian_phone = guardian.phone;
+          normalizedStudent.guardian_relationship_id = primaryGuardianRel.relationship_id 
+            ? String(primaryGuardianRel.relationship_id).trim() 
+            : null;
+          normalizedStudent.consent_flags = primaryGuardianRel.consent_flags;
+        }
+      }
+
       setStudent(normalizedStudent);
       // After save: merge updated values with existing formData to preserve unsaved changes in other tabs
       // Only update fields that were saved, don't overwrite entire formData
