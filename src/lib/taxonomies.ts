@@ -66,6 +66,11 @@ const SYSTEM_DEFAULTS: Record<string, TaxonomyItem[]> = {
     { id: "default-transferee", code: "TRANSFEREE", label: "Transferee" },
     { id: "default-returning", code: "RETURNING", label: "Returning" },
   ],
+  school_year_status: [
+    { id: "default-planning", code: "PLANNING", label: "Planning" },
+    { id: "default-active", code: "ACTIVE", label: "Active" },
+    { id: "default-inactive", code: "INACTIVE", label: "Inactive" },
+  ],
 };
 
 // Smart defaults (auto-selected on create)
@@ -74,6 +79,7 @@ export const SMART_DEFAULTS: Record<string, string> = {
   // sex: No default - requires explicit user choice
   attendance_status: "PRESENT",
   economic_status: "", // Optional, no default
+  school_year_status: "PLANNING", // New school years default to Planning
 };
 
 /**

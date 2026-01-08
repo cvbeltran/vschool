@@ -5,7 +5,15 @@ import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase/client";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { ExternalLink, Users } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { ExternalLink, Users, Search, ArrowUpDown, ArrowUp, ArrowDown, ChevronLeft, ChevronRight } from "lucide-react";
 
 interface Enrollment {
   id: string;
@@ -42,8 +50,22 @@ export default function EnrollmentsPage() {
   const [schoolsMap, setSchoolsMap] = useState<Map<string, School>>(new Map());
   const [programsMap, setProgramsMap] = useState<Map<string, Program>>(new Map());
   const [sectionsMap, setSectionsMap] = useState<Map<string, Section>>(new Map());
+  const [schools, setSchools] = useState<School[]>([]); // For filter dropdown
+  const [programs, setPrograms] = useState<Program[]>([]); // For filter dropdown
+  const [sections, setSections] = useState<Section[]>([]); // For filter dropdown
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Pagination state
+  const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage] = useState(10);
+  // Search and filter state
+  const [searchQuery, setSearchQuery] = useState("");
+  const [filterSchool, setFilterSchool] = useState<string>("all");
+  const [filterProgram, setFilterProgram] = useState<string>("all");
+  const [filterSection, setFilterSection] = useState<string>("all");
+  // Sorting state
+  const [sortColumn, setSortColumn] = useState<string | null>(null);
+  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
 
   useEffect(() => {
     const fetchData = async () => {
@@ -93,6 +115,7 @@ export default function EnrollmentsPage() {
           schools.set(school.id, school);
         });
         setSchoolsMap(schools);
+        setSchools(schoolsData || []); // Also set array for filter dropdown
       }
 
       // Fetch programs separately
@@ -110,6 +133,7 @@ export default function EnrollmentsPage() {
           programs.set(program.id, program);
         });
         setProgramsMap(programs);
+        setPrograms(programsData || []); // Also set array for filter dropdown
       }
 
       // Fetch sections separately
@@ -127,6 +151,7 @@ export default function EnrollmentsPage() {
           sections.set(section.id, section);
         });
         setSectionsMap(sections);
+        setSections(sectionsData || []); // Also set array for filter dropdown
       }
 
       // INVARIANT: Student views derive context ONLY from admission
@@ -186,6 +211,11 @@ export default function EnrollmentsPage() {
     fetchData();
   }, []);
 
+  // Reset to page 1 when filters change
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchQuery, filterSchool, filterProgram, filterSection]);
+
   if (loading) {
     return (
       <div className="space-y-6">
@@ -237,6 +267,105 @@ export default function EnrollmentsPage() {
     }
   };
 
+  // Filter, search, and sort enrollments
+  const filteredAndSortedEnrollments = enrollments.filter((enrollment) => {
+    // Search filter (name)
+    if (searchQuery) {
+      const fullName = `${enrollment.first_name} ${enrollment.last_name}`.toLowerCase();
+      if (!fullName.includes(searchQuery.toLowerCase())) {
+        return false;
+      }
+    }
+
+    // School filter
+    if (filterSchool !== "all" && enrollment.school_id !== filterSchool) {
+      return false;
+    }
+
+    // Program filter
+    if (filterProgram !== "all" && enrollment.program_id !== filterProgram) {
+      return false;
+    }
+
+    // Section filter
+    if (filterSection !== "all") {
+      if (filterSection === "unassigned" && enrollment.section_id !== null) {
+        return false;
+      }
+      if (filterSection !== "unassigned" && enrollment.section_id !== filterSection) {
+        return false;
+      }
+    }
+
+    return true;
+  }).sort((a, b) => {
+    if (!sortColumn) return 0;
+
+    let aValue: string | number;
+    let bValue: string | number;
+
+    switch (sortColumn) {
+      case "name":
+        aValue = `${a.last_name}, ${a.first_name}`.toLowerCase();
+        bValue = `${b.last_name}, ${b.first_name}`.toLowerCase();
+        break;
+      case "school":
+        aValue = getSchoolName(a);
+        bValue = getSchoolName(b);
+        break;
+      case "program":
+        aValue = getProgramName(a);
+        bValue = getProgramName(b);
+        break;
+      case "section":
+        const aSection = getSectionName(a) || "";
+        const bSection = getSectionName(b) || "";
+        aValue = aSection.toLowerCase();
+        bValue = bSection.toLowerCase();
+        break;
+      case "created_at":
+        aValue = new Date(a.created_at).getTime();
+        bValue = new Date(b.created_at).getTime();
+        break;
+      default:
+        return 0;
+    }
+
+    if (aValue < bValue) return sortDirection === "asc" ? -1 : 1;
+    if (aValue > bValue) return sortDirection === "asc" ? 1 : -1;
+    return 0;
+  });
+
+  // Pagination calculations
+  const totalPages = Math.ceil(filteredAndSortedEnrollments.length / itemsPerPage);
+  const startIndex = (currentPage - 1) * itemsPerPage;
+  const endIndex = startIndex + itemsPerPage;
+  const paginatedEnrollments = filteredAndSortedEnrollments.slice(startIndex, endIndex);
+
+  // Handle column sorting
+  const handleSort = (column: string) => {
+    if (sortColumn === column) {
+      // Toggle direction if same column
+      setSortDirection(sortDirection === "asc" ? "desc" : "asc");
+    } else {
+      // Set new column and default to ascending
+      setSortColumn(column);
+      setSortDirection("asc");
+    }
+  };
+
+  // Get sort icon for column header
+  const getSortIcon = (column: string) => {
+    if (sortColumn !== column) {
+      return <ArrowUpDown className="size-3 ml-1 text-muted-foreground" />;
+    }
+    return sortDirection === "asc" ? (
+      <ArrowUp className="size-3 ml-1" />
+    ) : (
+      <ArrowDown className="size-3 ml-1" />
+    );
+  };
+
   return (
     <div className="space-y-6">
       <div>
@@ -254,6 +383,17 @@ export default function EnrollmentsPage() {
         </Card>
       )}
 
+      {/* Search Bar */}
+      <div className="relative max-w-md">
+        <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 size-4 text-muted-foreground" />
+        <Input
+          placeholder="Search by name..."
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          className="pl-9"
+        />
+      </div>
+
       {!error && enrollments.length === 0 ? (
         <Card>
           <CardContent className="py-12 text-center">
@@ -264,20 +404,112 @@ export default function EnrollmentsPage() {
           </CardContent>
         </Card>
       ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full border-collapse">
-            <thead>
-              <tr className="border-b">
-                <th className="px-4 py-3 text-left text-sm font-medium">Name</th>
-                <th className="px-4 py-3 text-left text-sm font-medium">School</th>
-                <th className="px-4 py-3 text-left text-sm font-medium">Program</th>
-                <th className="px-4 py-3 text-left text-sm font-medium">Section</th>
-                <th className="px-4 py-3 text-left text-sm font-medium">Enrolled Date</th>
-                <th className="px-4 py-3 text-left text-sm font-medium">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {enrollments.map((enrollment) => {
+        <>
+          {/* Table Header with Filters */}
+          <div className="flex items-center justify-between mb-2">
+            <div className="text-sm text-muted-foreground">
+              Showing {filteredAndSortedEnrollments.length} of {enrollments.length} enrollments
+            </div>
+            <div className="flex items-center gap-2">
+              <Select value={filterSchool} onValueChange={setFilterSchool}>
+                <SelectTrigger className="w-[160px] h-9">
+                  <SelectValue placeholder="School" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Schools</SelectItem>
+                  {schools.map((school) => (
+                    <SelectItem key={school.id} value={school.id}>
+                      {school.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+
+              <Select value={filterProgram} onValueChange={setFilterProgram}>
+                <SelectTrigger className="w-[160px] h-9">
+                  <SelectValue placeholder="Program" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Programs</SelectItem>
+                  {programs.map((program) => (
+                    <SelectItem key={program.id} value={program.id}>
+                      {program.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+
+              <Select value={filterSection} onValueChange={setFilterSection}>
+                <SelectTrigger className="w-[160px] h-9">
+                  <SelectValue placeholder="Section" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Sections</SelectItem>
+                  <SelectItem value="unassigned">Unassigned</SelectItem>
+                  {sections.map((section) => (
+                    <SelectItem key={section.id} value={section.id}>
+                      {section.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="w-full border-collapse">
+              <thead>
+                <tr className="border-b">
+                  <th 
+                    className="px-4 py-3 text-left text-sm font-medium cursor-pointer hover:bg-muted/50"
+                    onClick={() => handleSort("name")}
+                  >
+                    <div className="flex items-center">
+                      Name
+                      {getSortIcon("name")}
+                    </div>
+                  </th>
+                  <th 
+                    className="px-4 py-3 text-left text-sm font-medium cursor-pointer hover:bg-muted/50"
+                    onClick={() => handleSort("school")}
+                  >
+                    <div className="flex items-center">
+                      School
+                      {getSortIcon("school")}
+                    </div>
+                  </th>
+                  <th 
+                    className="px-4 py-3 text-left text-sm font-medium cursor-pointer hover:bg-muted/50"
+                    onClick={() => handleSort("program")}
+                  >
+                    <div className="flex items-center">
+                      Program
+                      {getSortIcon("program")}
+                    </div>
+                  </th>
+                  <th 
+                    className="px-4 py-3 text-left text-sm font-medium cursor-pointer hover:bg-muted/50"
+                    onClick={() => handleSort("section")}
+                  >
+                    <div className="flex items-center">
+                      Section
+                      {getSortIcon("section")}
+                    </div>
+                  </th>
+                  <th 
+                    className="px-4 py-3 text-left text-sm font-medium cursor-pointer hover:bg-muted/50"
+                    onClick={() => handleSort("created_at")}
+                  >
+                    <div className="flex items-center">
+                      Enrolled Date
+                      {getSortIcon("created_at")}
+                    </div>
+                  </th>
+                  <th className="px-4 py-3 text-left text-sm font-medium">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {paginatedEnrollments.map((enrollment) => {
                 const sectionName = getSectionName(enrollment);
                 const schoolName = getSchoolName(enrollment);
                 const programName = getProgramName(enrollment);
@@ -331,6 +563,65 @@ export default function EnrollmentsPage() {
             </tbody>
           </table>
         </div>
+
+        {/* Pagination Controls */}
+        {totalPages > 1 && (
+          <div className="flex items-center justify-between mt-4">
+            <div className="text-sm text-muted-foreground">
+              Page {currentPage} of {totalPages}
+            </div>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setCurrentPage((prev) => Math.max(1, prev - 1))}
+                disabled={currentPage === 1}
+              >
+                <ChevronLeft className="size-4" />
+                Previous
+              </Button>
+              <div className="flex items-center gap-1">
+                {Array.from({ length: totalPages }, (_, i) => i + 1).map((page) => {
+                  // Show first page, last page, current page, and pages around current
+                  if (
+                    page === 1 ||
+                    page === totalPages ||
+                    (page >= currentPage - 1 && page <= currentPage + 1)
+                  ) {
+                    return (
+                      <Button
+                        key={page}
+                        variant={currentPage === page ? "default" : "outline"}
+                        size="sm"
+                        onClick={() => setCurrentPage(page)}
+                        className="w-9"
+                      >
+                        {page}
+                      </Button>
+                    );
+                  } else if (page === currentPage - 2 || page === currentPage + 2) {
+                    return (
+                      <span key={page} className="px-2 text-muted-foreground">
+                        ...
+                      </span>
+                    );
+                  }
+                  return null;
+                })}
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setCurrentPage((prev) => Math.min(totalPages, prev + 1))}
+                disabled={currentPage === totalPages}
+              >
+                Next
+                <ChevronRight className="size-4" />
+              </Button>
+            </div>
+          </div>
+        )}
+      </>
       )}
     </div>
   );

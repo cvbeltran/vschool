@@ -17,7 +17,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
-import { ArrowLeft, Plus, Pencil, XCircle, Info } from "lucide-react";
+import { ArrowLeft, Plus, Pencil, XCircle, Info, Trash2 } from "lucide-react";
 import { normalizeRole, canPerform } from "@/lib/rbac";
 
 interface Taxonomy {
@@ -133,10 +133,10 @@ export default function TaxonomyDetailPage() {
 
       setTaxonomy(taxonomyData);
 
-      // Fetch taxonomy items (description may not exist in older schemas)
+      // Fetch taxonomy items
       const { data: itemsData, error: itemsError } = await supabase
         .from("taxonomy_items")
-        .select("id, taxonomy_id, code, label, sort_order, is_active, created_at")
+        .select("id, taxonomy_id, code, label, description, sort_order, is_active, created_at")
         .eq("taxonomy_id", taxonomyData.id)
         .order("sort_order", { ascending: true, nullsFirst: false })
         .order("label", { ascending: true });
@@ -238,7 +238,57 @@ export default function TaxonomyDetailPage() {
     // Refresh items list
     const { data: itemsData, error: itemsError } = await supabase
       .from("taxonomy_items")
-      .select("id, taxonomy_id, code, label, sort_order, is_active, created_at")
+      .select("id, taxonomy_id, code, label, description, sort_order, is_active, created_at")
+      .eq("taxonomy_id", taxonomy.id)
+      .order("sort_order", { ascending: true, nullsFirst: false })
+      .order("label", { ascending: true });
+
+    if (!itemsError && itemsData) {
+      setItems(itemsData);
+      setError(null);
+    }
+  };
+
+  const handleDelete = async (item: TaxonomyItem) => {
+    if (!taxonomy) return;
+
+    const confirmed = window.confirm(
+      `Are you sure you want to delete "${item.label}"? This action cannot be undone. Any records using this item may be affected.`
+    );
+
+    if (!confirmed) return;
+
+    // Delete guidance first if it exists
+    const { error: guidanceDeleteError } = await supabase
+      .from("taxonomy_guidance")
+      .delete()
+      .eq("taxonomy_item_id", item.id);
+
+    if (guidanceDeleteError) {
+      console.warn("Error deleting guidance (continuing anyway):", guidanceDeleteError);
+    }
+
+    // Delete the taxonomy item
+    const { error: deleteError } = await supabase
+      .from("taxonomy_items")
+      .delete()
+      .eq("id", item.id);
+
+    if (deleteError) {
+      console.error("Error deleting item:", deleteError);
+      setError(deleteError.message || "Failed to delete item.");
+      return;
+    }
+
+    // Remove from local guidance map
+    const newGuidanceMap = new Map(guidanceMap);
+    newGuidanceMap.delete(item.id);
+    setGuidanceMap(newGuidanceMap);
+
+    // Refresh items list
+    const { data: itemsData, error: itemsError } = await supabase
+      .from("taxonomy_items")
+      .select("id, taxonomy_id, code, label, description, sort_order, is_active, created_at")
       .eq("taxonomy_id", taxonomy.id)
       .order("sort_order", { ascending: true, nullsFirst: false })
       .order("label", { ascending: true });
@@ -264,12 +314,10 @@ export default function TaxonomyDetailPage() {
       const updateData: any = {
         label: formData.label,
         code: formData.code.toUpperCase(),
+        description: formData.description || null,
         sort_order: formData.sort_order,
         is_active: formData.is_active,
       };
-      // Only include description if column exists (will be added via SQL migration)
-      // Uncomment after running: ALTER TABLE public.taxonomy_items ADD COLUMN IF NOT EXISTS description TEXT;
-      // updateData.description = formData.description || null;
       
       const { error: updateError } = await supabase
         .from("taxonomy_items")
@@ -287,12 +335,10 @@ export default function TaxonomyDetailPage() {
         taxonomy_id: taxonomy.id,
         label: formData.label,
         code: formData.code.toUpperCase(),
+        description: formData.description || null,
         sort_order: formData.sort_order,
         is_active: formData.is_active,
       };
-      // Only include description if column exists (will be added via SQL migration)
-      // Uncomment after running: ALTER TABLE public.taxonomy_items ADD COLUMN IF NOT EXISTS description TEXT;
-      // insertData.description = formData.description || null;
       
       const { error: createError } = await supabase.from("taxonomy_items").insert([insertData]);
 
@@ -306,7 +352,7 @@ export default function TaxonomyDetailPage() {
     // Refresh items list
     const { data: itemsData, error: itemsError } = await supabase
       .from("taxonomy_items")
-      .select("id, taxonomy_id, code, label, sort_order, is_active, created_at")
+      .select("id, taxonomy_id, code, label, description, sort_order, is_active, created_at")
       .eq("taxonomy_id", taxonomy.id)
       .order("sort_order", { ascending: true, nullsFirst: false })
       .order("label", { ascending: true });
@@ -389,7 +435,8 @@ export default function TaxonomyDetailPage() {
   const canUpdate = canPerform(role, "update", "taxonomies", originalRole);
   const canEdit = canCreate || canUpdate;
   const isSystem = taxonomy?.is_system || false;
-  const canEditItems = canEdit && !isSystem;
+  // Allow CRUD on items even for system taxonomies - users can manage their own system taxonomies
+  const canEditItems = canEdit;
 
   const getStatusBadge = (isActive: boolean) => {
     return isActive ? (
@@ -455,8 +502,7 @@ export default function TaxonomyDetailPage() {
               <tr className="border-b">
                 <th className="px-4 py-3 text-left text-sm font-medium">Label</th>
                 <th className="px-4 py-3 text-left text-sm font-medium">Code</th>
-                {/* Description column - uncomment after running migration SQL */}
-                {/* <th className="px-4 py-3 text-left text-sm font-medium">Description</th> */}
+                <th className="px-4 py-3 text-left text-sm font-medium">Description</th>
                 <th className="px-4 py-3 text-left text-sm font-medium">Status</th>
                 {canEdit && (
                   <th className="px-4 py-3 text-left text-sm font-medium">Actions</th>
@@ -468,10 +514,9 @@ export default function TaxonomyDetailPage() {
                 <tr key={item.id} className="border-b">
                   <td className="px-4 py-3 text-sm font-medium">{item.label}</td>
                   <td className="px-4 py-3 text-sm font-mono text-xs">{item.code}</td>
-                  {/* Description cell - uncomment after running migration SQL */}
-                  {/* <td className="px-4 py-3 text-sm text-muted-foreground">
+                  <td className="px-4 py-3 text-sm text-muted-foreground">
                     {item.description || "—"}
-                  </td> */}
+                  </td>
                   <td className="px-4 py-3 text-sm">{getStatusBadge(item.is_active)}</td>
                   {canEdit && (
                     <td className="px-4 py-3">
@@ -492,12 +537,21 @@ export default function TaxonomyDetailPage() {
                                 variant="ghost"
                                 size="sm"
                                 onClick={() => handleDisable(item)}
-                                className="gap-1 text-muted-foreground hover:text-destructive"
+                                className="gap-1 text-muted-foreground hover:text-orange-600"
                               >
                                 <XCircle className="size-4" />
                                 Disable
                               </Button>
                             )}
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => handleDelete(item)}
+                              className="gap-1 text-destructive hover:text-destructive"
+                            >
+                              <Trash2 className="size-4" />
+                              Delete
+                            </Button>
                           </>
                         )}
                         {canEdit && (
@@ -564,8 +618,6 @@ export default function TaxonomyDetailPage() {
                 Stable identifier (e.g. LOW_INCOME, GRADE_6). Cannot be changed after creation.
               </p>
             </div>
-            {/* Description field - uncomment after running migration SQL to add column */}
-            {/* 
             <div className="space-y-2">
               <Label htmlFor="description">Description (Optional)</Label>
               <Textarea
@@ -578,7 +630,6 @@ export default function TaxonomyDetailPage() {
                 rows={3}
               />
             </div>
-            */}
             <div className="space-y-2">
               <Label htmlFor="sort_order">Sort Order (Optional)</Label>
               <Input
