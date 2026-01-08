@@ -44,7 +44,8 @@ export type Resource =
   | "admissions"
   | "batches"
   | "attendance"
-  | "taxonomies";
+  | "taxonomies"
+  | "school_years";
 
 /**
  * Check if a role can view a navigation item
@@ -115,7 +116,7 @@ export function canPerform(
   // PART 4: Principal has full read/write access (Phase-1.5)
   if (role === "principal") {
     // Principal can create/update/delete schools and operational records
-    if (resource === "schools" || resource === "programs" || resource === "sections" || resource === "taxonomies") {
+    if (resource === "schools" || resource === "programs" || resource === "sections" || resource === "taxonomies" || resource === "school_years") {
       return action === "create" || action === "update" || action === "delete";
     }
     // Can create/update/delete students, admissions, batches, attendance
@@ -143,8 +144,8 @@ export function canPerform(
         // Enrollment actions only (no general student management)
         return action === "create" || action === "update"; // Allow create/update for enrollment
       }
-      if (resource === "schools" || resource === "programs" || resource === "sections") {
-        // Registrar can manage schools, programs, sections
+      if (resource === "schools" || resource === "programs" || resource === "sections" || resource === "school_years") {
+        // Registrar can manage schools, programs, sections, school_years
         return action === "create" || action === "update" || action === "delete";
       }
       if (resource === "taxonomies") {
@@ -155,7 +156,7 @@ export function canPerform(
     }
     
     // Admin: Full read/write (same as Principal)
-    if (resource === "schools" || resource === "programs" || resource === "sections" || resource === "taxonomies") {
+    if (resource === "schools" || resource === "programs" || resource === "sections" || resource === "taxonomies" || resource === "school_years") {
       return action === "create" || action === "update" || action === "delete";
     }
     // Can create/update/delete students, admissions, batches, attendance

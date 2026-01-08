@@ -21,7 +21,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Plus, CheckCircle, XCircle, UserCheck, Loader2, Clock, ExternalLink, Info } from "lucide-react";
+import { Plus, CheckCircle, XCircle, UserCheck, Loader2, Clock, ExternalLink, Info, ChevronLeft, ChevronRight, Search, ArrowUpDown, ArrowUp, ArrowDown, X } from "lucide-react";
 import { normalizeRole, canPerform } from "@/lib/rbac";
 import { useRouter } from "next/navigation";
 import {
@@ -36,11 +36,19 @@ interface Admission {
   school_id: string;
   program_id: string;
   section_id: string | null;
+  school_year_id: string | null;
   first_name: string;
   last_name: string;
   email: string | null;
   status: string;
   created_at: string;
+}
+
+interface SchoolYear {
+  id: string;
+  year_label: string;
+  start_date: string;
+  end_date: string;
 }
 
 interface School {
@@ -70,6 +78,8 @@ export default function AdmissionsPage() {
   const [programs, setPrograms] = useState<Program[]>([]);
   const [sections, setSections] = useState<Section[]>([]); // All sections for table display
   const [formSections, setFormSections] = useState<Section[]>([]); // Sections filtered for form
+  const [schoolYears, setSchoolYears] = useState<SchoolYear[]>([]); // School years with PLANNING status
+  const [allSchoolYears, setAllSchoolYears] = useState<Map<string, SchoolYear>>(new Map()); // All school years for display
   const [studentIdMap, setStudentIdMap] = useState<Map<string, string>>(new Map()); // Map admission_id -> student_id
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -81,7 +91,19 @@ export default function AdmissionsPage() {
   const [enrollingId, setEnrollingId] = useState<string | null>(null);
   const [acceptingId, setAcceptingId] = useState<string | null>(null);
   const [rejectingId, setRejectingId] = useState<string | null>(null);
+  // Pagination state
+  const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage] = useState(10);
+  // Search and filter state
+  const [searchQuery, setSearchQuery] = useState("");
+  const [filterStatus, setFilterStatus] = useState<string>("all");
+  const [filterSchoolYear, setFilterSchoolYear] = useState<string>("all");
+  const [filterSchool, setFilterSchool] = useState<string>("all");
+  // Sorting state - default to status sorting (pending, accepted, enrolled, rejected)
+  const [sortColumn, setSortColumn] = useState<string | null>("status");
+  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
   const [formData, setFormData] = useState({
+    school_year_id: "",
     school_id: "",
     program_id: "",
     section_id: "",
@@ -151,12 +173,46 @@ export default function AdmissionsPage() {
         setSections(sectionsData || []);
       }
 
+      // Fetch school years with PLANNING status only (for form)
+      // First, get the PLANNING status taxonomy item ID
+      const { data: planningStatus } = await supabase
+        .from("taxonomy_items")
+        .select("id")
+        .eq("code", "PLANNING")
+        .single();
+
+      if (planningStatus) {
+        const { data: schoolYearsData, error: schoolYearsError } = await supabase
+          .from("school_years")
+          .select("id, year_label, start_date, end_date")
+          .eq("status_id", planningStatus.id)
+          .order("start_date", { ascending: false });
+
+        if (schoolYearsError) {
+          console.error("Error fetching school years:", schoolYearsError);
+        } else {
+          setSchoolYears(schoolYearsData || []);
+        }
+      }
+
+      // Fetch ALL school years for display (to show in table)
+      const { data: allSchoolYearsData, error: allSchoolYearsError } = await supabase
+        .from("school_years")
+        .select("id, year_label, start_date, end_date")
+        .order("start_date", { ascending: false });
+
+      if (!allSchoolYearsError && allSchoolYearsData) {
+        const schoolYearMap = new Map<string, SchoolYear>();
+        allSchoolYearsData.forEach((sy) => {
+          schoolYearMap.set(sy.id, sy);
+        });
+        setAllSchoolYears(schoolYearMap);
+      }
+
       // Fetch admissions
-      // TODO: Add academic_year filter when schema supports it
-      // Example: .eq("academic_year", currentAcademicYear)
       const { data, error: fetchError } = await supabase
         .from("admissions")
-        .select("id, school_id, program_id, section_id, first_name, last_name, email, status, created_at")
+        .select("id, school_id, program_id, section_id, school_year_id, first_name, last_name, email, status, created_at")
         .order("created_at", { ascending: false });
 
       if (fetchError) {
@@ -231,8 +287,14 @@ export default function AdmissionsPage() {
     setFormSections(filteredSections);
   }, [formData.program_id, isDialogOpen, sections]);
 
+  // Reset to page 1 when admissions change, search, filters, or sorting change
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [admissions.length, searchQuery, filterStatus, filterSchoolYear, filterSchool, sortColumn, sortDirection]);
+
   const handleCreate = () => {
     setFormData({
+      school_year_id: "",
       school_id: "",
       program_id: "",
       section_id: "",
@@ -243,7 +305,7 @@ export default function AdmissionsPage() {
   };
 
   const handleSubmit = async () => {
-    if (!formData.first_name || !formData.last_name || !formData.school_id || !formData.program_id) {
+    if (!formData.first_name || !formData.last_name || !formData.school_year_id || !formData.school_id || !formData.program_id) {
       setError("Please fill in all required fields.");
       return;
     }
@@ -254,6 +316,7 @@ export default function AdmissionsPage() {
     // Create new admission with status "pending"
     const { error: createError } = await supabase.from("admissions").insert([
       {
+        school_year_id: formData.school_year_id,
         school_id: formData.school_id,
         program_id: formData.program_id,
         section_id: formData.section_id || null,
@@ -278,7 +341,7 @@ export default function AdmissionsPage() {
     // Refresh admissions list
     const { data: refreshData, error: refreshError } = await supabase
       .from("admissions")
-      .select("id, school_id, program_id, section_id, first_name, last_name, email, status, created_at")
+      .select("id, school_id, program_id, section_id, school_year_id, first_name, last_name, email, status, created_at")
       .order("created_at", { ascending: false });
 
     if (refreshError) {
@@ -299,6 +362,7 @@ export default function AdmissionsPage() {
 
     setIsDialogOpen(false);
     setFormData({
+      school_year_id: "",
       school_id: "",
       program_id: "",
       section_id: "",
@@ -327,7 +391,7 @@ export default function AdmissionsPage() {
     // Refresh admissions list
     const { data } = await supabase
       .from("admissions")
-      .select("id, school_id, program_id, section_id, first_name, last_name, email, status, created_at")
+      .select("id, school_id, program_id, section_id, school_year_id, first_name, last_name, email, status, created_at")
       .order("created_at", { ascending: false });
 
     if (data) {
@@ -361,7 +425,7 @@ export default function AdmissionsPage() {
     // Refresh admissions list
     const { data } = await supabase
       .from("admissions")
-      .select("id, school_id, program_id, section_id, first_name, last_name, email, status, created_at")
+      .select("id, school_id, program_id, section_id, school_year_id, first_name, last_name, email, status, created_at")
       .order("created_at", { ascending: false });
 
     if (data) {
@@ -460,7 +524,7 @@ export default function AdmissionsPage() {
     // Refresh admissions list
     const { data } = await supabase
       .from("admissions")
-      .select("id, school_id, program_id, section_id, first_name, last_name, email, status, created_at")
+      .select("id, school_id, program_id, section_id, school_year_id, first_name, last_name, email, status, created_at")
       .order("created_at", { ascending: false });
 
     if (data) {
@@ -513,6 +577,143 @@ export default function AdmissionsPage() {
     if (!sectionId) return "Unassigned";
     return sections.find((s) => s.id === sectionId)?.name || "Unknown";
   };
+
+  const getSchoolYearLabel = (schoolYearId: string | null) => {
+    if (!schoolYearId) return "—";
+    return allSchoolYears.get(schoolYearId)?.year_label || "Unknown";
+  };
+
+  // Filter, search, and sort admissions
+  // If no search and no filters, ensure default sort by status
+  const shouldUseDefaultSort = !searchQuery && filterStatus === "all" && filterSchoolYear === "all" && filterSchool === "all";
+  
+  const filteredAndSortedAdmissions = admissions.filter((admission) => {
+    // Search filter (name)
+    if (searchQuery) {
+      const fullName = `${admission.first_name} ${admission.last_name}`.toLowerCase();
+      if (!fullName.includes(searchQuery.toLowerCase())) {
+        return false;
+      }
+    }
+
+    // Status filter
+    if (filterStatus !== "all" && admission.status !== filterStatus) {
+      return false;
+    }
+
+    // School year filter
+    if (filterSchoolYear !== "all" && admission.school_year_id !== filterSchoolYear) {
+      return false;
+    }
+
+    // School filter
+    if (filterSchool !== "all" && admission.school_id !== filterSchool) {
+      return false;
+    }
+
+    return true;
+  }).sort((a, b) => {
+    // Determine effective sort column and direction
+    const effectiveSortColumn = shouldUseDefaultSort ? "status" : (sortColumn || null);
+    const effectiveSortDirection = shouldUseDefaultSort ? "asc" : (sortColumn ? sortDirection : "desc");
+    
+    if (!effectiveSortColumn) return 0;
+
+    let aValue: string | number;
+    let bValue: string | number;
+
+    switch (effectiveSortColumn) {
+      case "name":
+        aValue = `${a.last_name}, ${a.first_name}`.toLowerCase();
+        bValue = `${b.last_name}, ${b.first_name}`.toLowerCase();
+        break;
+      case "school_year":
+        aValue = getSchoolYearLabel(a.school_year_id);
+        bValue = getSchoolYearLabel(b.school_year_id);
+        break;
+      case "school":
+        aValue = getSchoolName(a.school_id);
+        bValue = getSchoolName(b.school_id);
+        break;
+      case "program":
+        aValue = getProgramName(a.program_id);
+        bValue = getProgramName(b.program_id);
+        break;
+      case "section":
+        aValue = getSectionName(a.section_id);
+        bValue = getSectionName(b.section_id);
+        break;
+      case "status":
+        // Custom status order: pending, accepted, enrolled, rejected (rejected always last)
+        const statusOrder: Record<string, number> = {
+          pending: 1,
+          accepted: 2,
+          enrolled: 3,
+          rejected: 4,
+        };
+        
+        // If one is rejected, it always goes to bottom (regardless of sort direction)
+        if (a.status === "rejected" && b.status !== "rejected") return 1;
+        if (b.status === "rejected" && a.status !== "rejected") return -1;
+        if (a.status === "rejected" && b.status === "rejected") return 0;
+        
+        // For other statuses, use the order and respect sort direction
+        const aStatusOrder = statusOrder[a.status] || 999;
+        const bStatusOrder = statusOrder[b.status] || 999;
+        aValue = aStatusOrder;
+        bValue = bStatusOrder;
+        break;
+      case "created_at":
+        aValue = new Date(a.created_at).getTime();
+        bValue = new Date(b.created_at).getTime();
+        break;
+      default:
+        return 0;
+    }
+
+    if (aValue < bValue) return effectiveSortDirection === "asc" ? -1 : 1;
+    if (aValue > bValue) return effectiveSortDirection === "asc" ? 1 : -1;
+    return 0;
+  });
+
+  // Pagination calculations
+  const totalPages = Math.ceil(filteredAndSortedAdmissions.length / itemsPerPage);
+  const startIndex = (currentPage - 1) * itemsPerPage;
+  const endIndex = startIndex + itemsPerPage;
+  const paginatedAdmissions = filteredAndSortedAdmissions.slice(startIndex, endIndex);
+
+  // Handle column sorting
+  const handleSort = (column: string) => {
+    const effectiveSortColumn = shouldUseDefaultSort ? "status" : (sortColumn || null);
+    const effectiveSortDirection = shouldUseDefaultSort ? "asc" : (sortColumn ? sortDirection : "desc");
+    
+    if (effectiveSortColumn === column) {
+      // Toggle direction if same column
+      setSortDirection(effectiveSortDirection === "asc" ? "desc" : "asc");
+    } else {
+      // Set new column and default to ascending
+      setSortColumn(column);
+      setSortDirection("asc");
+    }
+  };
+
+  // Get sort icon for column header
+  const getSortIcon = (column: string) => {
+    const effectiveSortColumn = shouldUseDefaultSort ? "status" : (sortColumn || null);
+    const effectiveSortDirection = shouldUseDefaultSort ? "asc" : (sortColumn ? sortDirection : "desc");
+    const isStatusDefault = column === "status" && shouldUseDefaultSort;
+    const isCurrentlySorted = effectiveSortColumn === column || isStatusDefault;
+    
+    if (!isCurrentlySorted) {
+      return <ArrowUpDown className="size-3 ml-1 text-muted-foreground" />;
+    }
+    return effectiveSortDirection === "asc" ? (
+      <ArrowUp className="size-3 ml-1" />
+    ) : (
+      <ArrowDown className="size-3 ml-1" />
+    );
+  };
+
 
   const getStatusBadge = (status: string) => {
     const statusConfig: Record<string, { color: string; icon: ReactElement; label: string }> = {
@@ -573,6 +774,17 @@ export default function AdmissionsPage() {
         </Card>
       )}
 
+      {/* Search Bar */}
+      <div className="relative max-w-md">
+        <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 size-4 text-muted-foreground" />
+        <Input
+          placeholder="Search by name..."
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          className="pl-9"
+        />
+      </div>
+
       {!error && admissions.length === 0 ? (
         <Card>
           <CardContent className="py-12 text-center">
@@ -583,25 +795,131 @@ export default function AdmissionsPage() {
           </CardContent>
         </Card>
       ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full border-collapse">
-            <thead>
-              <tr className="border-b">
-                <th className="px-4 py-3 text-left text-sm font-medium">Name</th>
-                <th className="px-4 py-3 text-left text-sm font-medium">School</th>
-                <th className="px-4 py-3 text-left text-sm font-medium">Program</th>
-                <th className="px-4 py-3 text-left text-sm font-medium">Section</th>
-                <th className="px-4 py-3 text-left text-sm font-medium">Status</th>
+        <>
+          {/* Table Header with Filters */}
+          <div className="flex items-center justify-between mb-2">
+            <div className="text-sm text-muted-foreground">
+              Showing {filteredAndSortedAdmissions.length} of {admissions.length} admissions
+            </div>
+            <div className="flex items-center gap-2">
+              <Select value={filterStatus} onValueChange={setFilterStatus}>
+                <SelectTrigger className="w-[140px] h-9">
+                  <SelectValue placeholder="Status" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Statuses</SelectItem>
+                  <SelectItem value="pending">Pending</SelectItem>
+                  <SelectItem value="enrolled">Enrolled</SelectItem>
+                  <SelectItem value="accepted">Accepted</SelectItem>
+                  <SelectItem value="rejected">Rejected</SelectItem>
+                </SelectContent>
+              </Select>
+
+              <Select value={filterSchoolYear} onValueChange={setFilterSchoolYear}>
+                <SelectTrigger className="w-[160px] h-9">
+                  <SelectValue placeholder="School Year" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All School Years</SelectItem>
+                  {Array.from(allSchoolYears.values()).map((sy) => (
+                    <SelectItem key={sy.id} value={sy.id}>
+                      {sy.year_label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+
+              <Select value={filterSchool} onValueChange={setFilterSchool}>
+                <SelectTrigger className="w-[160px] h-9">
+                  <SelectValue placeholder="School" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Schools</SelectItem>
+                  {schools.map((school) => (
+                    <SelectItem key={school.id} value={school.id}>
+                      {school.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="w-full border-collapse">
+              <thead>
+                <tr className="border-b">
+                <th 
+                  className="px-4 py-3 text-left text-sm font-medium cursor-pointer hover:bg-muted/50 select-none"
+                  onClick={() => handleSort("name")}
+                >
+                  <div className="flex items-center">
+                    Name
+                    {getSortIcon("name")}
+                  </div>
+                </th>
+                <th 
+                  className="px-4 py-3 text-left text-sm font-medium cursor-pointer hover:bg-muted/50 select-none"
+                  onClick={() => handleSort("school_year")}
+                >
+                  <div className="flex items-center">
+                    School Year
+                    {getSortIcon("school_year")}
+                  </div>
+                </th>
+                <th 
+                  className="px-4 py-3 text-left text-sm font-medium cursor-pointer hover:bg-muted/50 select-none"
+                  onClick={() => handleSort("school")}
+                >
+                  <div className="flex items-center">
+                    School
+                    {getSortIcon("school")}
+                  </div>
+                </th>
+                <th 
+                  className="px-4 py-3 text-left text-sm font-medium cursor-pointer hover:bg-muted/50 select-none"
+                  onClick={() => handleSort("program")}
+                >
+                  <div className="flex items-center">
+                    Program
+                    {getSortIcon("program")}
+                  </div>
+                </th>
+                <th 
+                  className="px-4 py-3 text-left text-sm font-medium cursor-pointer hover:bg-muted/50 select-none"
+                  onClick={() => handleSort("section")}
+                >
+                  <div className="flex items-center">
+                    Section
+                    {getSortIcon("section")}
+                  </div>
+                </th>
+                <th 
+                  className="px-4 py-3 text-left text-sm font-medium cursor-pointer hover:bg-muted/50 select-none"
+                  onClick={() => handleSort("status")}
+                >
+                  <div className="flex items-center">
+                    Status
+                    {getSortIcon("status")}
+                  </div>
+                </th>
                 {canEdit && (
                   <th className="px-4 py-3 text-left text-sm font-medium">Actions</th>
                 )}
               </tr>
             </thead>
-            <tbody>
-              {admissions.map((admission) => (
+              <tbody>
+                {paginatedAdmissions.map((admission) => (
                 <tr key={admission.id} className="border-b">
                   <td className="px-4 py-3 text-sm">
                     {admission.last_name}, {admission.first_name}
+                  </td>
+                  <td className="px-4 py-3 text-sm">
+                    {admission.school_year_id ? (
+                      <span className="font-medium">{getSchoolYearLabel(admission.school_year_id)}</span>
+                    ) : (
+                      <span className="text-muted-foreground">—</span>
+                    )}
                   </td>
                   <td className="px-4 py-3 text-sm">{getSchoolName(admission.school_id)}</td>
                   <td className="px-4 py-3 text-sm">{getProgramName(admission.program_id)}</td>
@@ -725,10 +1043,65 @@ export default function AdmissionsPage() {
                     </td>
                   )}
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Pagination Controls */}
+          {filteredAndSortedAdmissions.length > itemsPerPage && (
+            <div className="flex items-center justify-between border-t pt-4">
+              <div className="text-sm text-muted-foreground">
+                Showing {startIndex + 1} to {Math.min(endIndex, filteredAndSortedAdmissions.length)} of {filteredAndSortedAdmissions.length} admissions
+              </div>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setCurrentPage((prev) => Math.max(1, prev - 1))}
+                  disabled={currentPage === 1}
+                >
+                  <ChevronLeft className="size-4" />
+                  Previous
+                </Button>
+                <div className="flex items-center gap-1">
+                  {Array.from({ length: Math.max(1, totalPages) }, (_, i) => i + 1).map((page) => {
+                    // Show first page, last page, current page, and pages around current
+                    if (
+                      page === 1 ||
+                      page === totalPages ||
+                      (page >= currentPage - 1 && page <= currentPage + 1)
+                    ) {
+                      return (
+                        <Button
+                          key={page}
+                          variant={currentPage === page ? "default" : "outline"}
+                          size="sm"
+                          onClick={() => setCurrentPage(page)}
+                          className="min-w-[2.5rem]"
+                        >
+                          {page}
+                        </Button>
+                      );
+                    } else if (page === currentPage - 2 || page === currentPage + 2) {
+                      return <span key={page} className="px-2">...</span>;
+                    }
+                    return null;
+                  })}
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setCurrentPage((prev) => Math.min(totalPages, prev + 1))}
+                  disabled={currentPage === totalPages}
+                >
+                  Next
+                  <ChevronRight className="size-4" />
+                </Button>
+              </div>
+            </div>
+          )}
+        </>
       )}
 
       <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
@@ -740,6 +1113,39 @@ export default function AdmissionsPage() {
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-4">
+            {mounted && schoolYears.length > 0 && (
+              <div className="space-y-2">
+                <Label htmlFor="school_year_id">School Year <span className="text-destructive">*</span></Label>
+                <Select
+                  value={formData.school_year_id}
+                  onValueChange={(value) => {
+                    setFormData({ ...formData, school_year_id: value });
+                  }}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select school year" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {schoolYears.map((schoolYear) => (
+                      <SelectItem key={schoolYear.id} value={schoolYear.id}>
+                        {schoolYear.year_label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">
+                  Only school years with Planning status are available for new admissions.
+                </p>
+              </div>
+            )}
+            {mounted && schoolYears.length === 0 && (
+              <div className="space-y-2">
+                <Label>School Year</Label>
+                <div className="text-sm text-destructive bg-destructive/10 border border-destructive/20 rounded-md p-3">
+                  No school years with Planning status available. Please create a school year with Planning status in Calendar Settings.
+                </div>
+              </div>
+            )}
             <div className="space-y-2">
               <Label htmlFor="first_name">First Name</Label>
               <Input
