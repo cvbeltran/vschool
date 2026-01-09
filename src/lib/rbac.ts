@@ -45,7 +45,8 @@ export type Resource =
   | "batches"
   | "attendance"
   | "taxonomies"
-  | "school_years";
+  | "school_years"
+  | "staff";
 
 /**
  * Check if a role can view a navigation item
@@ -119,8 +120,8 @@ export function canPerform(
     if (resource === "schools" || resource === "programs" || resource === "sections" || resource === "taxonomies" || resource === "school_years") {
       return action === "create" || action === "update" || action === "delete";
     }
-    // Can create/update/delete students, admissions, batches, attendance
-    if (["students", "admissions", "batches", "attendance"].includes(resource)) {
+    // Can create/update/delete students, admissions, batches, attendance, staff
+    if (["students", "admissions", "batches", "attendance", "staff"].includes(resource)) {
       return action === "create" || action === "update" || action === "delete" || action === "export";
     }
     return false;
@@ -159,8 +160,8 @@ export function canPerform(
     if (resource === "schools" || resource === "programs" || resource === "sections" || resource === "taxonomies" || resource === "school_years") {
       return action === "create" || action === "update" || action === "delete";
     }
-    // Can create/update/delete students, admissions, batches, attendance
-    if (["students", "admissions", "batches", "attendance"].includes(resource)) {
+    // Can create/update/delete students, admissions, batches, attendance, staff
+    if (["students", "admissions", "batches", "attendance", "staff"].includes(resource)) {
       return action === "create" || action === "update" || action === "delete" || action === "export";
     }
   }
