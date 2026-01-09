@@ -77,8 +77,8 @@ export default function SignupPage() {
         return;
       }
 
-      // Success - redirect to login
-      router.push("/sis/auth/login?message=Account created successfully. Please sign in.");
+      // Success - redirect to login with message to check email
+      router.push("/sis/auth/login?message=Account created successfully! Please check your email to confirm your account before signing in.");
     } catch (err) {
       setError("An unexpected error occurred. Please try again.");
       setLoading(false);

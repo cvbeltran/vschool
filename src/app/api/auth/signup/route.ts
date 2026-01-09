@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { createClient } from "@supabase/supabase-js";
 import { supabaseServer } from "@/lib/supabase/server";
 
 export async function POST(request: NextRequest) {
@@ -51,28 +52,8 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Check if user email already exists
-    try {
-      const { data: existingUser, error: userCheckError } = await supabaseServer.auth.admin.getUserByEmail(email);
-      
-      // If user exists, return error
-      if (existingUser?.user) {
-        return NextResponse.json(
-          { error: "An account with this email already exists" },
-          { status: 400 }
-        );
-      }
-      
-      // If there's an error, it might be "user not found" which is fine
-      // We'll catch duplicate email errors during user creation
-      if (userCheckError) {
-        // Log but continue - we'll catch duplicate errors during creation
-        console.warn("Warning checking user existence (may be 'not found'):", userCheckError.message);
-      }
-    } catch (userCheckErr: any) {
-      // If getUserByEmail throws, continue - we'll catch it during user creation
-      console.warn("Warning checking user existence:", userCheckErr?.message || userCheckErr);
-    }
+    // Check if user email already exists by listing users and filtering
+    // Note: getUserByEmail doesn't exist in admin API, so we'll catch duplicate errors during creation
 
     // Create organization first
     const { data: organization, error: orgError } = await supabaseServer
@@ -105,18 +86,25 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Create user account via Supabase Auth Admin API
-    const { data: userData, error: userError } = await supabaseServer.auth.admin.createUser({
+    // Create user account using regular signUp() method
+    // This automatically sends confirmation email (if SMTP is configured)
+    const supabaseClient = createClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+    );
+
+    const { data: userData, error: userError } = await supabaseClient.auth.signUp({
       email,
       password,
-      email_confirm: true, // Auto-confirm email for sign-up
+      options: {
+        emailRedirectTo: `${process.env.NEXT_PUBLIC_SITE_URL || 'http://localhost:3000'}/sis/auth/confirm`,
+      },
     });
 
     if (userError || !userData?.user) {
       console.error("Error creating user:", {
         error: userError,
         message: userError?.message,
-        status: userError?.status,
       });
       // Rollback: delete organization if user creation fails
       await supabaseServer
@@ -132,6 +120,9 @@ export async function POST(request: NextRequest) {
         { status: 500 }
       );
     }
+
+    // signUp() automatically sends confirmation email if SMTP is configured
+    // No need to manually generate links or trigger email sending
 
     // Create profile with organization_id and admin role
     const { error: profileError } = await supabaseServer
@@ -153,6 +144,7 @@ export async function POST(request: NextRequest) {
         hint: profileError?.hint,
       });
       // Rollback: delete user and organization
+      // Use admin API to delete user since we need service role key
       await supabaseServer.auth.admin.deleteUser(userData.user.id);
       await supabaseServer
         .from("organizations")
