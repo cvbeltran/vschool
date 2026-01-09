@@ -32,7 +32,11 @@ export async function GET(request: NextRequest) {
 
     if (!error) {
       // Token verified successfully - user is now logged in
-      // Redirect to password setup page
+      // For recovery type, redirect to reset password page
+      // For other types (signup, invite), redirect to set password or next URL
+      if (type === 'recovery') {
+        return NextResponse.redirect(new URL('/sis/auth/reset-password', request.url));
+      }
       return NextResponse.redirect(new URL(next, request.url));
     } else {
       console.error('Error verifying OTP:', error);
@@ -43,8 +47,9 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  // No token_hash or type - redirect to login
+  // No token_hash or type - this might be a direct access or malformed link
+  // Redirect to login with a helpful message
   const loginUrl = new URL('/sis/auth/login', request.url);
-  loginUrl.searchParams.set('error', 'Missing confirmation parameters');
+  loginUrl.searchParams.set('error', 'Invalid or incomplete confirmation link. Please check your email for the correct link.');
   return NextResponse.redirect(loginUrl);
 }
