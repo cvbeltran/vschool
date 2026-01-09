@@ -10,6 +10,7 @@ import { ExternalLink, ChevronDown } from "lucide-react";
 import { fetchTaxonomyItems } from "@/lib/taxonomies";
 import { TAXONOMY_KEYS } from "@/lib/constants/student-columns";
 import type { TaxonomyItem } from "@/lib/taxonomies";
+import { useOrganization } from "@/lib/hooks/use-organization";
 
 interface StudentInfo {
   id: string;
@@ -30,6 +31,7 @@ interface GroupedGuardian {
 
 export default function GuardiansPage() {
   const router = useRouter();
+  const { organizationId, isSuperAdmin, isLoading: orgLoading } = useOrganization();
   const [guardians, setGuardians] = useState<GroupedGuardian[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -73,12 +75,14 @@ export default function GuardiansPage() {
 
   useEffect(() => {
     const fetchData = async () => {
+      if (orgLoading) return; // Wait for organization context
+      
       try {
         setLoading(true);
         setError(null);
 
-        // Fetch guardians with their student relationships
-        const { data: guardiansData, error: guardiansError } = await supabase
+        // Fetch guardians with their student relationships - filter by organization_id unless super admin
+        let query = supabase
           .from("guardians")
           .select(`
             id,
@@ -98,8 +102,13 @@ export default function GuardiansPage() {
                 email
               )
             )
-          `)
-          .order("name", { ascending: true });
+          `);
+        
+        if (!isSuperAdmin && organizationId) {
+          query = query.eq("organization_id", organizationId);
+        }
+        
+        const { data: guardiansData, error: guardiansError } = await query.order("name", { ascending: true });
 
         if (guardiansError) {
           console.error("Error fetching guardians:", guardiansError);
@@ -219,39 +228,41 @@ export default function GuardiansPage() {
       }
     };
 
-    fetchData();
+    if (!orgLoading) {
+      fetchData();
 
-    // Set up real-time subscription to listen for changes to guardians and student_guardians tables
-    const channel = supabase
-      .channel("guardians-changes")
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "guardians",
-        },
-        () => {
-          fetchData();
-        }
-      )
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "student_guardians",
-        },
-        () => {
-          fetchData();
-        }
-      )
-      .subscribe();
+      // Set up real-time subscription to listen for changes to guardians and student_guardians tables
+      const channel = supabase
+        .channel("guardians-changes")
+        .on(
+          "postgres_changes",
+          {
+            event: "*",
+            schema: "public",
+            table: "guardians",
+          },
+          () => {
+            fetchData();
+          }
+        )
+        .on(
+          "postgres_changes",
+          {
+            event: "*",
+            schema: "public",
+            table: "student_guardians",
+          },
+          () => {
+            fetchData();
+          }
+        )
+        .subscribe();
 
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, []);
+      return () => {
+        supabase.removeChannel(channel);
+      };
+    }
+  }, [organizationId, isSuperAdmin, orgLoading]);
 
   // Close dropdowns when clicking outside and update positions on scroll/resize
   useEffect(() => {

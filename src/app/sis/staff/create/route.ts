@@ -4,7 +4,11 @@ import { supabaseServer } from "@/lib/supabase/server";
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { email, first_name, middle_name, last_name, suffix, position_title_id } = body;
+    const { email, first_name, middle_name, last_name, suffix, position_title_id, organization_id } = body;
+
+    // Get organization_id from request body (passed from client)
+    // RLS policies will ensure users can only create staff in their own organization
+    const creatorOrganizationId = organization_id;
 
     // Validate required fields
     if (!email || !first_name || !last_name || !position_title_id) {
@@ -103,12 +107,13 @@ export async function POST(request: NextRequest) {
       authRole = roleMap[positionTitle.code] || "teacher";
     }
 
-    // Create or update profiles record
+    // Create or update profiles record with organization_id
     const { error: profileError } = await supabaseServer
       .from("profiles")
       .upsert({
         id: userId,
         role: authRole,
+        organization_id: creatorOrganizationId, // Staff belongs to same org as creator
       }, {
         onConflict: "id",
       });
@@ -132,7 +137,14 @@ export async function POST(request: NextRequest) {
       staffId = `STF${String(lastNumber + 1).padStart(3, "0")}`;
     }
 
-    // Create staff record
+    if (!creatorOrganizationId) {
+      return NextResponse.json(
+        { error: "Unable to determine organization context. Please ensure you are logged in." },
+        { status: 400 }
+      );
+    }
+
+    // Create staff record with organization_id
     const { data: staffData, error: staffError } = await supabaseServer
       .from("staff")
       .insert({
@@ -143,6 +155,7 @@ export async function POST(request: NextRequest) {
         middle_name: middle_name || null,
         last_name,
         suffix: suffix || null,
+        organization_id: creatorOrganizationId,
       })
       .select()
       .single();

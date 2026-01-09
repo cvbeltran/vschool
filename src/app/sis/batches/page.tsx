@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase/client";
 import { Card, CardContent } from "@/components/ui/card";
+import { useOrganization } from "@/lib/hooks/use-organization";
 
 interface Batch {
   id: string;
@@ -13,15 +14,23 @@ interface Batch {
 }
 
 export default function BatchesPage() {
+  const { organizationId, isSuperAdmin, isLoading: orgLoading } = useOrganization();
   const [batches, setBatches] = useState<Batch[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     const fetchBatches = async () => {
-      const { data, error } = await supabase
+      if (orgLoading) return; // Wait for organization context
+      
+      let query = supabase
         .from("batches")
-        .select("id, name, status, start_date, end_date")
-        .order("created_at", { ascending: false });
+        .select("id, name, status, start_date, end_date");
+      
+      if (!isSuperAdmin && organizationId) {
+        query = query.eq("organization_id", organizationId);
+      }
+      
+      const { data, error } = await query.order("created_at", { ascending: false });
 
       if (error) {
         console.error("Error fetching batches:", error);
@@ -33,8 +42,10 @@ export default function BatchesPage() {
       setLoading(false);
     };
 
-    fetchBatches();
-  }, []);
+    if (!orgLoading) {
+      fetchBatches();
+    }
+  }, [organizationId, isSuperAdmin, orgLoading]);
 
   const formatDateRange = (startDate: string | null, endDate: string | null) => {
     if (!startDate && !endDate) {

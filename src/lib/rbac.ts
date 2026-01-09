@@ -6,9 +6,25 @@
  * - admin: Full read/write access (same as Principal)
  * - registrar: Admissions + enrollment only
  * - teacher: Attendance and communications only
+ * 
+ * Multi-Tenant Notes:
+ * - All users belong to exactly one organization
+ * - Super admins can access all organizations (bypasses organization checks)
+ * - Organization isolation is enforced at the database level via RLS policies
+ * - RBAC checks are scoped to the user's organization context
  */
 
 export type Role = "principal" | "admin" | "registrar" | "teacher";
+
+/**
+ * Check if a user is a super admin
+ * Note: This should be checked against the user's profile in the database
+ * @param isSuperAdmin - Boolean from profile.is_super_admin
+ * @returns true if user is super admin
+ */
+export function isSuperAdmin(isSuperAdmin: boolean | null | undefined): boolean {
+  return isSuperAdmin === true;
+}
 
 // Normalize role (registrar = admin for navigation, but differentiated in canPerform)
 export function normalizeRole(role: string | null): "principal" | "admin" | "teacher" {

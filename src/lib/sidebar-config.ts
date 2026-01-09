@@ -18,6 +18,8 @@ import {
   BookOpen,
   CalendarDays,
   FolderTree,
+  Building2,
+  Shield,
 } from "lucide-react";
 import { LucideIcon } from "lucide-react";
 
@@ -28,6 +30,7 @@ export interface SidebarItem {
   href: string;
   icon: LucideIcon;
   allowedRoles: NormalizedRole[];
+  superAdminOnly?: boolean; // New property for super admin only items
   children?: SidebarItem[];
 }
 
@@ -145,6 +148,12 @@ export const sidebarConfig: SidebarSection[] = [
     label: "Settings",
     items: [
       {
+        label: "Organization",
+        href: "/sis/settings/organization",
+        icon: Building2,
+        allowedRoles: ["principal", "admin"],
+      },
+      {
         label: "Schools",
         href: "/sis/settings/schools",
         icon: School,
@@ -176,12 +185,27 @@ export const sidebarConfig: SidebarSection[] = [
       },
     ],
   },
+  {
+    label: "Admin",
+    items: [
+      {
+        label: "Super Admin",
+        href: "/sis/admin",
+        icon: Shield,
+        allowedRoles: ["principal", "admin", "teacher"], // Will be filtered by super admin check
+        superAdminOnly: true,
+      },
+    ],
+  },
 ];
 
 /**
- * Filter sidebar config by role
+ * Filter sidebar config by role and super admin status
  */
-export function getSidebarForRole(role: NormalizedRole): SidebarSection[] {
+export function getSidebarForRole(
+  role: NormalizedRole,
+  isSuperAdmin: boolean = false
+): SidebarSection[] {
   return sidebarConfig
     .map((section) => ({
       ...section,
@@ -193,6 +217,10 @@ export function getSidebarForRole(role: NormalizedRole): SidebarSection[] {
           ),
         }))
         .filter((item) => {
+          // If item is super admin only, check super admin status
+          if (item.superAdminOnly) {
+            return isSuperAdmin;
+          }
           // Include item if it's allowed for this role
           if (item.allowedRoles.includes(role)) {
             return true;

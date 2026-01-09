@@ -24,6 +24,7 @@ import {
 import { Plus, CheckCircle, XCircle, UserCheck, Loader2, Clock, ExternalLink, Info, ChevronLeft, ChevronRight, Search, ArrowUpDown, ArrowUp, ArrowDown, X } from "lucide-react";
 import { normalizeRole, canPerform } from "@/lib/rbac";
 import { useRouter } from "next/navigation";
+import { useOrganization } from "@/lib/hooks/use-organization";
 import {
   Tooltip,
   TooltipContent,
@@ -73,6 +74,7 @@ interface Section {
 
 export default function AdmissionsPage() {
   const router = useRouter();
+  const { organizationId, isSuperAdmin, isLoading: orgLoading } = useOrganization();
   const [admissions, setAdmissions] = useState<Admission[]>([]);
   const [schools, setSchools] = useState<School[]>([]);
   const [programs, setPrograms] = useState<Program[]>([]);
@@ -117,6 +119,8 @@ export default function AdmissionsPage() {
 
   useEffect(() => {
     const fetchData = async () => {
+      if (orgLoading) return; // Wait for organization context
+      
       // Fetch user role
       let userRole: "principal" | "admin" | "teacher" = "principal";
       const {
@@ -136,11 +140,16 @@ export default function AdmissionsPage() {
         }
       }
 
-      // Fetch schools
-      const { data: schoolsData, error: schoolsError } = await supabase
+      // Fetch schools - filter by organization_id unless super admin
+      let schoolsQuery = supabase
         .from("schools")
-        .select("id, name")
-        .order("name", { ascending: true });
+        .select("id, name");
+      
+      if (!isSuperAdmin && organizationId) {
+        schoolsQuery = schoolsQuery.eq("organization_id", organizationId);
+      }
+      
+      const { data: schoolsData, error: schoolsError } = await schoolsQuery.order("name", { ascending: true });
 
       if (schoolsError) {
         console.error("Error fetching schools:", schoolsError);
@@ -149,11 +158,16 @@ export default function AdmissionsPage() {
         setSchools(schoolsData || []);
       }
 
-      // Fetch all programs for display (used in table)a
-      const { data: programsData, error: programsError } = await supabase
+      // Fetch all programs for display (used in table) - filter by organization_id unless super admin
+      let programsQuery = supabase
         .from("programs")
-        .select("id, school_id, name, code")
-        .order("name", { ascending: true });
+        .select("id, school_id, name, code");
+      
+      if (!isSuperAdmin && organizationId) {
+        programsQuery = programsQuery.eq("organization_id", organizationId);
+      }
+      
+      const { data: programsData, error: programsError } = await programsQuery.order("name", { ascending: true });
 
       if (programsError) {
         console.error("Error fetching programs:", programsError);
@@ -161,11 +175,16 @@ export default function AdmissionsPage() {
         setPrograms(programsData || []);
       }
 
-      // Fetch all sections for display (used in table)
-      const { data: sectionsData, error: sectionsError } = await supabase
+      // Fetch all sections for display (used in table) - filter by organization_id unless super admin
+      let sectionsQuery = supabase
         .from("sections")
-        .select("id, school_id, program_id, name, code")
-        .order("name", { ascending: true });
+        .select("id, school_id, program_id, name, code");
+      
+      if (!isSuperAdmin && organizationId) {
+        sectionsQuery = sectionsQuery.eq("organization_id", organizationId);
+      }
+      
+      const { data: sectionsData, error: sectionsError } = await sectionsQuery.order("name", { ascending: true });
 
       if (sectionsError) {
         console.error("Error fetching sections:", sectionsError);
@@ -182,11 +201,16 @@ export default function AdmissionsPage() {
         .single();
 
       if (planningStatus) {
-        const { data: schoolYearsData, error: schoolYearsError } = await supabase
+        let schoolYearsQuery = supabase
           .from("school_years")
           .select("id, year_label, start_date, end_date")
-          .eq("status_id", planningStatus.id)
-          .order("start_date", { ascending: false });
+          .eq("status_id", planningStatus.id);
+        
+        if (!isSuperAdmin && organizationId) {
+          schoolYearsQuery = schoolYearsQuery.eq("organization_id", organizationId);
+        }
+        
+        const { data: schoolYearsData, error: schoolYearsError } = await schoolYearsQuery.order("start_date", { ascending: false });
 
         if (schoolYearsError) {
           console.error("Error fetching school years:", schoolYearsError);
@@ -195,11 +219,16 @@ export default function AdmissionsPage() {
         }
       }
 
-      // Fetch ALL school years for display (to show in table)
-      const { data: allSchoolYearsData, error: allSchoolYearsError } = await supabase
+      // Fetch ALL school years for display (to show in table) - filter by organization_id unless super admin
+      let allSchoolYearsQuery = supabase
         .from("school_years")
-        .select("id, year_label, start_date, end_date")
-        .order("start_date", { ascending: false });
+        .select("id, year_label, start_date, end_date");
+      
+      if (!isSuperAdmin && organizationId) {
+        allSchoolYearsQuery = allSchoolYearsQuery.eq("organization_id", organizationId);
+      }
+      
+      const { data: allSchoolYearsData, error: allSchoolYearsError } = await allSchoolYearsQuery.order("start_date", { ascending: false });
 
       if (!allSchoolYearsError && allSchoolYearsData) {
         const schoolYearMap = new Map<string, SchoolYear>();
@@ -209,11 +238,16 @@ export default function AdmissionsPage() {
         setAllSchoolYears(schoolYearMap);
       }
 
-      // Fetch admissions
-      const { data, error: fetchError } = await supabase
+      // Fetch admissions - filter by organization_id unless super admin
+      let admissionsQuery = supabase
         .from("admissions")
-        .select("id, school_id, program_id, section_id, school_year_id, first_name, last_name, email, status, created_at")
-        .order("created_at", { ascending: false });
+        .select("id, school_id, program_id, section_id, school_year_id, first_name, last_name, email, status, created_at");
+      
+      if (!isSuperAdmin && organizationId) {
+        admissionsQuery = admissionsQuery.eq("organization_id", organizationId);
+      }
+      
+      const { data, error: fetchError } = await admissionsQuery.order("created_at", { ascending: false });
 
       if (fetchError) {
         const errorMessage = fetchError?.message || fetchError?.toString() || "Unknown error";
@@ -253,8 +287,10 @@ export default function AdmissionsPage() {
       setLoading(false);
     };
 
-    fetchData();
-  }, []);
+    if (!orgLoading) {
+      fetchData();
+    }
+  }, [organizationId, isSuperAdmin, orgLoading]);
 
   // Refresh programs when school changes in form
   useEffect(() => {
@@ -313,6 +349,26 @@ export default function AdmissionsPage() {
     setError(null);
     setSuccessMessage(null);
 
+    // Get user's organization_id for the admission
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+    let organizationId: string | null = null;
+    
+    if (session) {
+      const { data: profile } = await supabase
+        .from("profiles")
+        .select("organization_id")
+        .eq("id", session.user.id)
+        .single();
+      organizationId = profile?.organization_id || null;
+    }
+
+    if (!organizationId) {
+      setError("User is not associated with an organization.");
+      return;
+    }
+
     // Create new admission with status "pending"
     const { error: createError } = await supabase.from("admissions").insert([
       {
@@ -323,6 +379,7 @@ export default function AdmissionsPage() {
         first_name: formData.first_name,
         last_name: formData.last_name,
         status: "pending",
+        organization_id: organizationId,
       },
     ]);
 

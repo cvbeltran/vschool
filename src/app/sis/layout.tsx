@@ -15,6 +15,8 @@ import { LogOut } from "lucide-react";
 import { supabase } from "@/lib/supabase/client";
 import { normalizeRole } from "@/lib/rbac";
 import { getSidebarForRole, type NormalizedRole } from "@/lib/sidebar-config";
+import { useOrganization } from "@/lib/hooks/use-organization";
+import { OrganizationSwitcher } from "@/components/admin/organization-switcher";
 
 export default function SISLayout({
   children,
@@ -26,6 +28,7 @@ export default function SISLayout({
   const [role, setRole] = useState<"principal" | "admin" | "teacher">("principal");
   const [school, setSchool] = useState<string>("all");
   const [mounted, setMounted] = useState(false);
+  const { organization, isLoading: orgLoading, isSuperAdmin, selectedOrganizationId, setSelectedOrganizationId } = useOrganization();
 
   useEffect(() => {
     setMounted(true);
@@ -46,10 +49,10 @@ export default function SISLayout({
         return;
       }
 
-      // Fetch user profile role
+      // Fetch user profile role and super admin status
       const { data: profile, error } = await supabase
         .from("profiles")
-        .select("role")
+        .select("role, is_super_admin")
         .eq("id", session.user.id)
         .single();
 
@@ -67,8 +70,8 @@ export default function SISLayout({
     checkSessionAndFetchRole();
   }, [router, pathname]);
 
-  // Get filtered sidebar config for current role
-  const sidebarSections = getSidebarForRole(role);
+  // Get filtered sidebar config for current role and super admin status
+  const sidebarSections = getSidebarForRole(role, isSuperAdmin || false);
 
   const handleLogout = async () => {
     await supabase.auth.signOut();
@@ -89,8 +92,25 @@ export default function SISLayout({
       {/* Top Bar */}
       <header className="border-b bg-background">
         <div className="flex h-14 items-center justify-between gap-4 px-4 md:px-6">
-          <h1 className="text-lg font-semibold">vSchool · SIS</h1>
+          <div className="flex items-center gap-3">
+            <h1 className="text-lg font-semibold">vSchool · SIS</h1>
+            {!orgLoading && (
+              <>
+                {isSuperAdmin ? (
+                  <span className="text-sm text-muted-foreground">· Super Admin</span>
+                ) : organization ? (
+                  <span className="text-sm text-muted-foreground">· {organization.name}</span>
+                ) : null}
+              </>
+            )}
+          </div>
           <div className="flex items-center gap-4">
+            {isSuperAdmin && !orgLoading && (
+              <OrganizationSwitcher
+                selectedOrganizationId={selectedOrganizationId}
+                onOrganizationChange={setSelectedOrganizationId}
+              />
+            )}
             <div className="flex items-center gap-2">
               <label htmlFor="school-select" className="text-sm font-medium">
                 School:

@@ -171,6 +171,26 @@ export default function SchoolsPage() {
         return;
       }
     } else {
+      // Get user's organization_id for the school
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      let organizationId: string | null = null;
+      
+      if (session) {
+        const { data: profile } = await supabase
+          .from("profiles")
+          .select("organization_id")
+          .eq("id", session.user.id)
+          .single();
+        organizationId = profile?.organization_id || null;
+      }
+
+      if (!organizationId) {
+        setError("User is not associated with an organization.");
+        return;
+      }
+
       // Create new school
       const { error: createError } = await supabase.from("schools").insert([
         {
@@ -179,6 +199,7 @@ export default function SchoolsPage() {
           type: formData.type,
           location: formData.location,
           is_active: formData.is_active,
+          organization_id: organizationId,
         },
       ]);
 

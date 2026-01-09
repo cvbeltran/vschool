@@ -24,6 +24,7 @@ import {
 import { Plus, Search, ArrowUpDown, ArrowUp, ArrowDown, ChevronLeft, ChevronRight, Loader2, ExternalLink } from "lucide-react";
 import { normalizeRole, canPerform } from "@/lib/rbac";
 import { useRouter } from "next/navigation";
+import { useOrganization } from "@/lib/hooks/use-organization";
 
 interface Staff {
   id: string;
@@ -60,6 +61,7 @@ interface School {
 
 export default function StaffPage() {
   const router = useRouter();
+  const { organizationId, isSuperAdmin, isLoading: orgLoading } = useOrganization();
   const [staff, setStaff] = useState<Staff[]>([]);
   const [positionTitles, setPositionTitles] = useState<PositionTitle[]>([]);
   const [departments, setDepartments] = useState<Department[]>([]);
@@ -160,11 +162,16 @@ export default function StaffPage() {
         }
       }
 
-      // Fetch schools
-      const { data: schoolsData } = await supabase
+      // Fetch schools - filter by organization_id unless super admin
+      let schoolsQuery = supabase
         .from("schools")
-        .select("id, name")
-        .order("name", { ascending: true });
+        .select("id, name");
+      
+      if (!isSuperAdmin && organizationId) {
+        schoolsQuery = schoolsQuery.eq("organization_id", organizationId);
+      }
+      
+      const { data: schoolsData } = await schoolsQuery.order("name", { ascending: true });
 
       if (schoolsData) {
         setSchools(schoolsData);
@@ -174,8 +181,10 @@ export default function StaffPage() {
       await fetchStaff();
     };
 
-    fetchData();
-  }, []);
+    if (!orgLoading) {
+      fetchData();
+    }
+  }, [organizationId, isSuperAdmin, orgLoading]);
 
   // Reset to page 1 when filters change
   useEffect(() => {
@@ -184,7 +193,7 @@ export default function StaffPage() {
 
   const fetchStaff = async () => {
     try {
-      const { data, error } = await supabase
+      let query = supabase
         .from("staff")
         .select(`
           id,
@@ -202,8 +211,13 @@ export default function StaffPage() {
             department_id,
             school_id
           )
-        `)
-        .order("created_at", { ascending: false });
+        `);
+      
+      if (!isSuperAdmin && organizationId) {
+        query = query.eq("organization_id", organizationId);
+      }
+      
+      const { data, error } = await query.order("created_at", { ascending: false });
 
       if (error) {
         console.error("Error fetching staff:", error);
@@ -273,6 +287,27 @@ export default function StaffPage() {
     setCreating(true);
 
     try {
+      // Get user's organization_id
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      
+      let organizationId: string | null = null;
+      if (session) {
+        const { data: profile } = await supabase
+          .from("profiles")
+          .select("organization_id")
+          .eq("id", session.user.id)
+          .single();
+        organizationId = profile?.organization_id || null;
+      }
+
+      if (!organizationId) {
+        setError("User is not associated with an organization.");
+        setCreating(false);
+        return;
+      }
+
       const response = await fetch("/sis/staff/create", {
         method: "POST",
         headers: {
@@ -285,6 +320,7 @@ export default function StaffPage() {
           last_name: formData.last_name,
           suffix: formData.suffix || null,
           position_title_id: formData.position_title_id,
+          organization_id: organizationId,
         }),
       });
 

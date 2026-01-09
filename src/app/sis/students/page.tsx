@@ -6,6 +6,7 @@ import { supabase } from "@/lib/supabase/client";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Download, ExternalLink } from "lucide-react";
+import { useOrganization } from "@/lib/hooks/use-organization";
 
 interface Student {
   id: string;
@@ -19,12 +20,15 @@ type Role = "principal" | "admin";
 
 export default function StudentsPage() {
   const router = useRouter();
+  const { organizationId, isSuperAdmin, isLoading: orgLoading } = useOrganization();
   const [students, setStudents] = useState<Student[]>([]);
   const [loading, setLoading] = useState(true);
   const [role, setRole] = useState<Role>("principal");
 
   useEffect(() => {
     const fetchData = async () => {
+      if (orgLoading) return; // Wait for organization context
+
       // Fetch user role
       const {
         data: { session },
@@ -40,11 +44,16 @@ export default function StudentsPage() {
         }
       }
 
-      // Fetch students
-      const { data, error } = await supabase
+      // Fetch students - filter by organization_id unless super admin
+      let query = supabase
         .from("students")
-        .select("id, first_name, last_name, email, batch_id")
-        .order("created_at", { ascending: false });
+        .select("id, first_name, last_name, email, batch_id");
+      
+      if (!isSuperAdmin && organizationId) {
+        query = query.eq("organization_id", organizationId);
+      }
+      
+      const { data, error } = await query.order("created_at", { ascending: false });
 
       if (error) {
         console.error("Error fetching students:", error);
@@ -57,7 +66,7 @@ export default function StudentsPage() {
     };
 
     fetchData();
-  }, []);
+  }, [organizationId, isSuperAdmin, orgLoading]);
 
   if (loading) {
     return (

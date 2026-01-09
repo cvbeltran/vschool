@@ -115,6 +115,24 @@ export default function LoginPage() {
         return;
       }
 
+      // Check if user has organization_id in profile
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) {
+        const { data: profile } = await supabase
+          .from("profiles")
+          .select("organization_id")
+          .eq("id", user.id)
+          .single();
+        
+        if (!profile?.organization_id) {
+          // User doesn't have an organization - redirect to signup or show error
+          setError("Your account is not associated with an organization. Please contact your administrator.");
+          await supabase.auth.signOut();
+          setLoading(false);
+          return;
+        }
+      }
+
       router.push("/sis");
       router.refresh();
     } catch (err) {
@@ -179,6 +197,13 @@ export default function LoginPage() {
           <Button type="submit" className="w-full" disabled={loading}>
             {loading ? "Signing in..." : "Sign in"}
           </Button>
+          
+          <div className="text-center text-sm text-muted-foreground">
+            Don't have an account?{" "}
+            <a href="/sis/auth/signup" className="text-primary hover:underline">
+              Sign up
+            </a>
+          </div>
         </form>
       </div>
     </div>

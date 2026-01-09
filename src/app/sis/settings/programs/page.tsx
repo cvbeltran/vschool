@@ -24,6 +24,7 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { Plus, Pencil } from "lucide-react";
 import { normalizeRole, canPerform } from "@/lib/rbac";
+import { useOrganization } from "@/lib/hooks/use-organization";
 
 interface Program {
   id: string;
@@ -42,6 +43,7 @@ interface School {
 }
 
 export default function ProgramsPage() {
+  const { organizationId, isSuperAdmin, isLoading: orgLoading } = useOrganization();
   const [programs, setPrograms] = useState<Program[]>([]);
   const [schools, setSchools] = useState<School[]>([]);
   const [loading, setLoading] = useState(true);
@@ -67,6 +69,8 @@ export default function ProgramsPage() {
 
   useEffect(() => {
     const fetchData = async () => {
+      if (orgLoading) return; // Wait for organization context
+      
       // Fetch user role
       let userRole: "principal" | "admin" | "teacher" = "principal";
       const {
@@ -86,11 +90,16 @@ export default function ProgramsPage() {
         }
       }
 
-      // Fetch schools for filter
-      const { data: schoolsData, error: schoolsError } = await supabase
+      // Fetch schools for filter - filter by organization_id unless super admin
+      let schoolsQuery = supabase
         .from("schools")
-        .select("id, name")
-        .order("name", { ascending: true });
+        .select("id, name");
+      
+      if (!isSuperAdmin && organizationId) {
+        schoolsQuery = schoolsQuery.eq("organization_id", organizationId);
+      }
+      
+      const { data: schoolsData, error: schoolsError } = await schoolsQuery.order("name", { ascending: true });
 
       if (schoolsError) {
         console.error("Error fetching schools:", schoolsError);
@@ -103,11 +112,16 @@ export default function ProgramsPage() {
         }
       }
 
-      // Fetch programs
+      // Fetch programs - filter by organization_id unless super admin
       let query = supabase
         .from("programs")
-        .select("id, school_id, code, name, type, sort_order, is_active, created_at")
-        .order("sort_order", { ascending: true, nullsFirst: false })
+        .select("id, school_id, code, name, type, sort_order, is_active, created_at");
+      
+      if (!isSuperAdmin && organizationId) {
+        query = query.eq("organization_id", organizationId);
+      }
+      
+      query = query.order("sort_order", { ascending: true, nullsFirst: false })
         .order("name", { ascending: true });
 
       // Filter by school if selected
@@ -135,8 +149,10 @@ export default function ProgramsPage() {
       setLoading(false);
     };
 
-    fetchData();
-  }, [selectedSchoolId]);
+    if (!orgLoading) {
+      fetchData();
+    }
+  }, [selectedSchoolId, organizationId, isSuperAdmin, orgLoading]);
 
   const handleCreate = () => {
     setEditingProgram(null);

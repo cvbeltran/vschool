@@ -14,6 +14,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { ExternalLink, Users, Search, ArrowUpDown, ArrowUp, ArrowDown, ChevronLeft, ChevronRight } from "lucide-react";
+import { useOrganization } from "@/lib/hooks/use-organization";
 
 interface Enrollment {
   id: string;
@@ -46,6 +47,7 @@ interface Section {
 
 export default function EnrollmentsPage() {
   const router = useRouter();
+  const { organizationId, isSuperAdmin, isLoading: orgLoading } = useOrganization();
   const [enrollments, setEnrollments] = useState<Enrollment[]>([]);
   const [schoolsMap, setSchoolsMap] = useState<Map<string, School>>(new Map());
   const [programsMap, setProgramsMap] = useState<Map<string, Program>>(new Map());
@@ -69,8 +71,11 @@ export default function EnrollmentsPage() {
 
   useEffect(() => {
     const fetchData = async () => {
+      if (orgLoading) return; // Wait for organization context
+      
       // INVARIANT: Students derive context ONLY from admission via admission_id
-      const { data: studentsData, error: studentsError } = await supabase
+      // Filter by organization_id unless super admin
+      let studentsQuery = supabase
         .from("students")
         .select(`
           id,
@@ -80,8 +85,13 @@ export default function EnrollmentsPage() {
           batch_id,
           admission_id,
           created_at
-        `)
-        .order("created_at", { ascending: false });
+        `);
+      
+      if (!isSuperAdmin && organizationId) {
+        studentsQuery = studentsQuery.eq("organization_id", organizationId);
+      }
+      
+      const { data: studentsData, error: studentsError } = await studentsQuery.order("created_at", { ascending: false });
 
       if (studentsError) {
         // Fail fast if admission_id column doesn't exist - schema mismatch
@@ -100,11 +110,16 @@ export default function EnrollmentsPage() {
         return;
       }
 
-      // Fetch schools separately
-      const { data: schoolsData, error: schoolsError } = await supabase
+      // Fetch schools separately - filter by organization_id unless super admin
+      let schoolsQuery = supabase
         .from("schools")
-        .select("id, name")
-        .order("name", { ascending: true });
+        .select("id, name");
+      
+      if (!isSuperAdmin && organizationId) {
+        schoolsQuery = schoolsQuery.eq("organization_id", organizationId);
+      }
+      
+      const { data: schoolsData, error: schoolsError } = await schoolsQuery.order("name", { ascending: true });
 
       if (schoolsError) {
         console.error("Error fetching schools:", schoolsError);
@@ -118,11 +133,16 @@ export default function EnrollmentsPage() {
         setSchools(schoolsData || []); // Also set array for filter dropdown
       }
 
-      // Fetch programs separately
-      const { data: programsData, error: programsError } = await supabase
+      // Fetch programs separately - filter by organization_id unless super admin
+      let programsQuery = supabase
         .from("programs")
-        .select("id, name")
-        .order("name", { ascending: true });
+        .select("id, name");
+      
+      if (!isSuperAdmin && organizationId) {
+        programsQuery = programsQuery.eq("organization_id", organizationId);
+      }
+      
+      const { data: programsData, error: programsError } = await programsQuery.order("name", { ascending: true });
 
       if (programsError) {
         console.error("Error fetching programs:", programsError);
@@ -136,11 +156,16 @@ export default function EnrollmentsPage() {
         setPrograms(programsData || []); // Also set array for filter dropdown
       }
 
-      // Fetch sections separately
-      const { data: sectionsData, error: sectionsError } = await supabase
+      // Fetch sections separately - filter by organization_id unless super admin
+      let sectionsQuery = supabase
         .from("sections")
-        .select("id, name")
-        .order("name", { ascending: true });
+        .select("id, name");
+      
+      if (!isSuperAdmin && organizationId) {
+        sectionsQuery = sectionsQuery.eq("organization_id", organizationId);
+      }
+      
+      const { data: sectionsData, error: sectionsError } = await sectionsQuery.order("name", { ascending: true });
 
       if (sectionsError) {
         console.error("Error fetching sections:", sectionsError);
