@@ -13,6 +13,7 @@ export default function LoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [checkingSession, setCheckingSession] = useState(true);
 
@@ -86,11 +87,15 @@ export default function LoginPage() {
           return;
         }
       } else {
-        // No hash fragment - check for error in URL
+        // No hash fragment - check for error or message in URL
         setCheckingSession(false);
         const urlError = searchParams.get("error");
+        const urlMessage = searchParams.get("message");
         if (urlError) {
           setError(decodeURIComponent(urlError));
+        }
+        if (urlMessage) {
+          setMessage(decodeURIComponent(urlMessage));
         }
       }
     };
@@ -110,7 +115,20 @@ export default function LoginPage() {
       });
 
       if (error) {
-        setError(error.message);
+        // Check if error is due to unconfirmed email
+        const errorMessage = error.message.toLowerCase();
+        if (
+          errorMessage.includes("email not confirmed") ||
+          errorMessage.includes("email_not_confirmed") ||
+          errorMessage.includes("confirm your email") ||
+          errorMessage.includes("email confirmation")
+        ) {
+          setError(
+            "Your email address has not been confirmed. Please check your email inbox and click the confirmation link before signing in."
+          );
+        } else {
+          setError(error.message);
+        }
         setLoading(false);
         return;
       }
@@ -187,6 +205,12 @@ export default function LoginPage() {
               disabled={loading}
             />
           </div>
+
+          {message && (
+            <div className="rounded-md bg-green-50 dark:bg-green-950 border border-green-200 dark:border-green-800 p-3 text-sm text-green-800 dark:text-green-200">
+              {message}
+            </div>
+          )}
 
           {error && (
             <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">
