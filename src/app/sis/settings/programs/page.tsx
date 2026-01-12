@@ -199,8 +199,28 @@ export default function ProgramsPage() {
         return;
       }
 
+      // Determine organization_id: use from hook if available, otherwise derive from school
+      let finalOrganizationId = organizationId;
+      
+      if (!finalOrganizationId) {
+        // Super admin case: derive organization_id from the selected school
+        const { data: schoolData, error: schoolError } = await supabase
+          .from("schools")
+          .select("organization_id")
+          .eq("id", schoolId)
+          .single();
+        
+        if (schoolError || !schoolData?.organization_id) {
+          setError("Unable to determine organization. Please try again.");
+          return;
+        }
+        
+        finalOrganizationId = schoolData.organization_id;
+      }
+
       // Create new program - ensure all required fields are included
       const insertPayload = {
+        organization_id: finalOrganizationId,
         school_id: schoolId,
         name: formData.name,
         code: formData.code,

@@ -34,6 +34,7 @@ import {
 
 interface Admission {
   id: string;
+  organization_id?: string;
   school_id: string;
   program_id: string;
   section_id: string | null;
@@ -89,6 +90,14 @@ export default function AdmissionsPage() {
   const [role, setRole] = useState<"principal" | "admin" | "teacher">("principal");
   const [originalRole, setOriginalRole] = useState<string | null>(null); // Store original role for RBAC differentiation
   const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [isEnrollmentDialogOpen, setIsEnrollmentDialogOpen] = useState(false);
+  const [enrollingAdmission, setEnrollingAdmission] = useState<Admission | null>(null);
+  const [enrollmentFormData, setEnrollmentFormData] = useState({
+    email: "",
+    date_of_birth: "",
+    middle_initial: "",
+  });
+  const [enrollmentFormError, setEnrollmentFormError] = useState<string | null>(null);
   const [mounted, setMounted] = useState(false);
   const [enrollingId, setEnrollingId] = useState<string | null>(null);
   const [acceptingId, setAcceptingId] = useState<string | null>(null);
@@ -241,7 +250,7 @@ export default function AdmissionsPage() {
       // Fetch admissions - filter by organization_id unless super admin
       let admissionsQuery = supabase
         .from("admissions")
-        .select("id, school_id, program_id, section_id, school_year_id, first_name, last_name, email, status, created_at");
+        .select("id, organization_id, school_id, program_id, section_id, school_year_id, first_name, last_name, email, status, created_at");
       
       if (!isSuperAdmin && organizationId) {
         admissionsQuery = admissionsQuery.eq("organization_id", organizationId);
@@ -328,6 +337,126 @@ export default function AdmissionsPage() {
     setCurrentPage(1);
   }, [admissions.length, searchQuery, filterStatus, filterSchoolYear, filterSchool, sortColumn, sortDirection]);
 
+  // Helper function to find matching student admissions for duplicate enrollment check
+  const findMatchingStudentAdmissions = async (
+    firstName: string,
+    lastName: string,
+    email: string | null,
+    dateOfBirth: string | null,
+    schoolYearId: string,
+    programId: string,
+    organizationId: string | null
+  ): Promise<Array<{ id: string; school_year_id: string; program_id: string; first_name: string; last_name: string; email: string | null; status: string; school_year_status?: string }>> => {
+    // Normalize names for comparison
+    const normalizedFirstName = firstName.trim().toLowerCase();
+    const normalizedLastName = lastName.trim().toLowerCase();
+    const normalizedEmail = email?.trim().toLowerCase() || null;
+    const normalizedDOB = dateOfBirth ? dateOfBirth.trim() : null;
+
+    // Query enrolled admissions with same school_year + program
+    // Include school year status to check if previous year has ended
+    let admissionsQuery = supabase
+      .from("admissions")
+      .select(`
+        id,
+        school_year_id,
+        program_id,
+        first_name,
+        last_name,
+        email,
+        status,
+        organization_id,
+        school_years!inner(
+          id,
+          status_id,
+          taxonomy_items!inner(code)
+        )
+      `)
+      .eq("status", "enrolled")
+      .eq("school_year_id", schoolYearId)
+      .eq("program_id", programId);
+
+    // Filter by organization_id unless super admin
+    if (!isSuperAdmin && organizationId) {
+      admissionsQuery = admissionsQuery.eq("organization_id", organizationId);
+    }
+
+    const { data: admissionsData, error } = await admissionsQuery;
+
+    if (error || !admissionsData) {
+      console.error("Error fetching admissions for duplicate check:", error);
+      return [];
+    }
+
+    // If DOB is provided, also check students table to match by DOB
+    // This helps identify students even if email differs
+    let studentAdmissionIds: Set<string> = new Set();
+    if (normalizedDOB) {
+      let studentsQuery = supabase
+        .from("students")
+        .select("admission_id, date_of_birth")
+        .eq("date_of_birth", normalizedDOB)
+        .not("admission_id", "is", null);
+
+      if (!isSuperAdmin && organizationId) {
+        studentsQuery = studentsQuery.eq("organization_id", organizationId);
+      }
+
+      const { data: studentsData } = await studentsQuery;
+      if (studentsData) {
+        studentsData.forEach((student) => {
+          if (student.admission_id) {
+            studentAdmissionIds.add(student.admission_id);
+          }
+        });
+      }
+    }
+
+    // Filter in JavaScript for name/email/DOB matches
+    const matchingAdmissions = admissionsData.filter((admission) => {
+      // Normalize admission names
+      const admissionFirstName = (admission.first_name || "").trim().toLowerCase();
+      const admissionLastName = (admission.last_name || "").trim().toLowerCase();
+      const admissionEmail = (admission.email || "").trim().toLowerCase() || null;
+
+      // Check if names match (case-insensitive)
+      const nameMatches = admissionFirstName === normalizedFirstName && admissionLastName === normalizedLastName;
+
+      if (!nameMatches) {
+        return false;
+      }
+
+      // If names match, check for email match
+      if (normalizedEmail && admissionEmail && normalizedEmail === admissionEmail) {
+        return true;
+      }
+
+      // If names match and DOB matches (via students table lookup)
+      if (normalizedDOB && studentAdmissionIds.has(admission.id)) {
+        return true;
+      }
+
+      // If names match but no email/DOB provided, still flag as potential duplicate (conservative approach)
+      if (!normalizedEmail && !normalizedDOB) {
+        return true;
+      }
+
+      return false;
+    });
+
+    // Map results to include school year status
+    return matchingAdmissions.map((admission: any) => ({
+      id: admission.id,
+      school_year_id: admission.school_year_id,
+      program_id: admission.program_id,
+      first_name: admission.first_name,
+      last_name: admission.last_name,
+      email: admission.email,
+      status: admission.status,
+      school_year_status: admission.school_years?.taxonomy_items?.code || null,
+    }));
+  };
+
   const handleCreate = () => {
     setFormData({
       school_year_id: "",
@@ -369,6 +498,33 @@ export default function AdmissionsPage() {
       return;
     }
 
+    // Check for duplicate enrollment: same student + same school_year + same program
+    const matchingAdmissions = await findMatchingStudentAdmissions(
+      formData.first_name,
+      formData.last_name,
+      null, // Email not available in admission creation form
+      null, // DOB not available in admission creation form
+      formData.school_year_id,
+      formData.program_id,
+      organizationId
+    );
+
+    if (matchingAdmissions.length > 0) {
+      // Check if any matching admission is in an active school year
+      // If school year is INACTIVE, allow re-enrollment (previous year has ended)
+      const activeYearMatches = matchingAdmissions.filter(
+        (admission) => admission.school_year_status !== "INACTIVE"
+      );
+
+      if (activeYearMatches.length > 0) {
+        setError(
+          `Student "${formData.first_name} ${formData.last_name}" is already enrolled in this program for this school year. Cannot create duplicate admission.`
+        );
+        return;
+      }
+      // If all matches are in INACTIVE school years, allow re-enrollment (previous year ended)
+    }
+
     // Create new admission with status "pending"
     const { error: createError } = await supabase.from("admissions").insert([
       {
@@ -398,7 +554,7 @@ export default function AdmissionsPage() {
     // Refresh admissions list
     const { data: refreshData, error: refreshError } = await supabase
       .from("admissions")
-      .select("id, school_id, program_id, section_id, school_year_id, first_name, last_name, email, status, created_at")
+      .select("id, organization_id, school_id, program_id, section_id, school_year_id, first_name, last_name, email, status, created_at")
       .order("created_at", { ascending: false });
 
     if (refreshError) {
@@ -448,7 +604,7 @@ export default function AdmissionsPage() {
     // Refresh admissions list
     const { data } = await supabase
       .from("admissions")
-      .select("id, school_id, program_id, section_id, school_year_id, first_name, last_name, email, status, created_at")
+      .select("id, organization_id, school_id, program_id, section_id, school_year_id, first_name, last_name, email, status, created_at")
       .order("created_at", { ascending: false });
 
     if (data) {
@@ -482,7 +638,7 @@ export default function AdmissionsPage() {
     // Refresh admissions list
     const { data } = await supabase
       .from("admissions")
-      .select("id, school_id, program_id, section_id, school_year_id, first_name, last_name, email, status, created_at")
+      .select("id, organization_id, school_id, program_id, section_id, school_year_id, first_name, last_name, email, status, created_at")
       .order("created_at", { ascending: false });
 
     if (data) {
@@ -504,59 +660,280 @@ export default function AdmissionsPage() {
       return;
     }
 
-    setEnrollingId(admission.id);
-    setError(null);
-    setSuccessMessage(null);
+    // Open enrollment dialog to collect additional details
+    setEnrollingAdmission(admission);
+    setEnrollmentFormData({
+      email: admission.email || "",
+      date_of_birth: "",
+      middle_initial: "",
+    });
+    setEnrollmentFormError(null);
+    setIsEnrollmentDialogOpen(true);
+  };
 
-    // INVARIANT ENFORCEMENT: Check if student exists for this admission using admission_id
-    // Removed invalid assumption: name-based matching violates 1:1 invariant
+  const handleEnrollmentSubmit = async () => {
+    if (!enrollingAdmission) return;
+
+    setEnrollmentFormError(null);
+    setEnrollingId(enrollingAdmission.id);
+
+    // Validate form data
+    const email = enrollmentFormData.email.trim() || null;
+    const dateOfBirth = enrollmentFormData.date_of_birth.trim() || null;
+    const middleInitial = enrollmentFormData.middle_initial.trim().toUpperCase() || null;
+
+    // Validate email format if provided
+    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      setEnrollmentFormError("Please enter a valid email address.");
+      setEnrollingId(null);
+      return;
+    }
+
+    // Validate date of birth if provided
+    if (dateOfBirth) {
+      const dob = new Date(dateOfBirth);
+      const today = new Date();
+      if (dob > today) {
+        setEnrollmentFormError("Date of birth cannot be in the future.");
+        setEnrollingId(null);
+        return;
+      }
+      // Check reasonable age range (e.g., 3-100 years old)
+      // Calculate age more accurately accounting for month and day
+      let age = today.getFullYear() - dob.getFullYear();
+      const monthDiff = today.getMonth() - dob.getMonth();
+      if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < dob.getDate())) {
+        age--;
+      }
+      if (age < 3 || age > 100) {
+        setEnrollmentFormError("Please enter a valid date of birth (age between 3-100 years).");
+        setEnrollingId(null);
+        return;
+      }
+    }
+
+    // Validate middle initial if provided
+    if (middleInitial && middleInitial.length > 1) {
+      setEnrollmentFormError("Middle initial must be a single character.");
+      setEnrollingId(null);
+      return;
+    }
+
+    // Check if student already exists for this admission
     const { data: existingStudent, error: checkError } = await supabase
       .from("students")
       .select("id")
-      .eq("admission_id", admission.id)
+      .eq("admission_id", enrollingAdmission.id)
       .maybeSingle();
 
     if (checkError) {
       // Fail fast if admission_id column doesn't exist - schema mismatch
       if ((checkError.code === "42703" || checkError.code === "PGRST204") && 
           checkError.message?.includes("admission_id")) {
-        setError("Database schema mismatch: admission_id column required. Please run migration: ALTER TABLE students ADD COLUMN admission_id UUID REFERENCES admissions(id);");
+        setEnrollmentFormError("Database schema mismatch: admission_id column required. Please run migration: ALTER TABLE students ADD COLUMN admission_id UUID REFERENCES admissions(id);");
         setEnrollingId(null);
         return;
       }
       console.error("Error checking for existing student:", checkError);
-      setError("Failed to verify enrollment status. Please try again.");
+      setEnrollmentFormError("Failed to verify enrollment status. Please try again.");
       setEnrollingId(null);
       return;
     }
 
     if (existingStudent) {
-      setError("A student record already exists for this admission. Cannot enroll twice.");
+      setEnrollmentFormError("A student record already exists for this admission. Cannot enroll twice.");
       setEnrollingId(null);
       return;
+    }
+
+    // DUPLICATE DETECTION: Check for existing students with matching name, DOB, and/or email across ALL organizations
+    // Normalize names for comparison (trim and lowercase)
+    const normalizedFirstName = enrollingAdmission.first_name.trim().toLowerCase();
+    const normalizedLastName = enrollingAdmission.last_name.trim().toLowerCase();
+    const normalizedEmail = email?.trim().toLowerCase() || null;
+
+    // Build query to check for duplicate students
+    // Fetch all students and filter in JavaScript for exact name matches
+    // This approach is simpler and more reliable than complex Supabase queries
+    const { data: allStudents, error: duplicateCheckError } = await supabase
+      .from("students")
+      .select("id, first_name, last_name, legal_first_name, legal_last_name, email, primary_email, date_of_birth, organization_id");
+
+    if (duplicateCheckError) {
+      console.error("Error checking for duplicate students:", duplicateCheckError);
+      setError("Failed to verify student uniqueness. Please try again.");
+      setEnrollingId(null);
+      return;
+    }
+
+    // Filter potential duplicates to find exact matches
+    const potentialDuplicates = allStudents || [];
+
+    if (potentialDuplicates && potentialDuplicates.length > 0) {
+      const exactDuplicates = potentialDuplicates.filter((student) => {
+        // Normalize student names for comparison
+        const studentFirstName = (student.first_name || student.legal_first_name || "").trim().toLowerCase();
+        const studentLastName = (student.last_name || student.legal_last_name || "").trim().toLowerCase();
+        const studentEmail = (student.email || student.primary_email || "").trim().toLowerCase() || null;
+        const studentDOB = student.date_of_birth ? new Date(student.date_of_birth).toISOString().split('T')[0] : null;
+
+        // Check if names match (case-insensitive)
+        const nameMatches = studentFirstName === normalizedFirstName && studentLastName === normalizedLastName;
+
+        if (!nameMatches) {
+          return false;
+        }
+
+        // If names match, check for email or DOB match
+        if (normalizedEmail && studentEmail && normalizedEmail === studentEmail) {
+          return true;
+        }
+
+        if (dateOfBirth && studentDOB && dateOfBirth === studentDOB) {
+          return true;
+        }
+
+        // If names match but no email/DOB provided, treat as potential duplicate
+        // This is a conservative approach - warn user about potential duplicate
+        if (!normalizedEmail && !dateOfBirth) {
+          return true;
+        }
+
+        return false;
+      });
+
+      if (exactDuplicates.length > 0) {
+        const duplicate = exactDuplicates[0];
+        const duplicateOrgId = duplicate.organization_id;
+        const duplicateEmail = duplicate.email || duplicate.primary_email;
+        const duplicateDOB = duplicate.date_of_birth;
+        
+        let errorMessage = `A student with the same name "${enrollingAdmission.first_name} ${enrollingAdmission.last_name}"`;
+        
+        if (duplicateEmail && normalizedEmail) {
+          errorMessage += ` and email "${duplicateEmail}"`;
+        }
+        
+        if (duplicateDOB && dateOfBirth) {
+          errorMessage += ` and date of birth "${new Date(duplicateDOB).toLocaleDateString()}"`;
+        }
+        
+        errorMessage += " already exists in the system";
+        
+        if (duplicateOrgId) {
+          errorMessage += ` (Organization ID: ${duplicateOrgId})`;
+        }
+        
+        errorMessage += ". Cannot enroll duplicate student.";
+        
+        setEnrollmentFormError(errorMessage);
+        setEnrollingId(null);
+        return;
+      }
+    }
+
+    // Check for duplicate enrollment: same student + same school_year + same program
+    // This prevents enrolling the same student twice in the same school year + program
+    // Re-enrollment is allowed if previous school year has ended (status INACTIVE)
+    if (enrollingAdmission.school_year_id && enrollingAdmission.program_id) {
+      // Get organization_id first (needed for the check)
+      let admissionOrgId = enrollingAdmission.organization_id;
+      if (!admissionOrgId) {
+        const { data: admissionData, error: admissionFetchError } = await supabase
+          .from("admissions")
+          .select("organization_id")
+          .eq("id", enrollingAdmission.id)
+          .single();
+
+        if (admissionFetchError || !admissionData?.organization_id) {
+          setEnrollmentFormError("Unable to determine organization for this admission. Please try again.");
+          setEnrollingId(null);
+          return;
+        }
+        admissionOrgId = admissionData.organization_id;
+      }
+
+      const matchingAdmissions = await findMatchingStudentAdmissions(
+        enrollingAdmission.first_name,
+        enrollingAdmission.last_name,
+        email,
+        dateOfBirth,
+        enrollingAdmission.school_year_id,
+        enrollingAdmission.program_id,
+        admissionOrgId
+      );
+
+      if (matchingAdmissions.length > 0) {
+        // Check if any matching admission is in an active school year
+        // If school year is INACTIVE, allow re-enrollment (previous year has ended)
+        // Re-enrollment is based on school year completion, not student status
+        const activeYearMatches = matchingAdmissions.filter(
+          (admission) => admission.school_year_status !== "INACTIVE"
+        );
+
+        if (activeYearMatches.length > 0) {
+          setEnrollmentFormError(
+            `Student "${enrollingAdmission.first_name} ${enrollingAdmission.last_name}" is already enrolled in this program for this school year. Cannot enroll duplicate student in the same school year + program combination.`
+          );
+          setEnrollingId(null);
+          return;
+        }
+        // If all matches are in INACTIVE school years, allow re-enrollment (previous year ended)
+        // This allows students with any status (ACTIVE, PROMOTED, GRADUATED, etc.) to re-enroll
+      }
+    }
+
+    // Get organization_id from admission (fetch if not already in admission object)
+    let admissionOrgId = enrollingAdmission.organization_id;
+    if (!admissionOrgId) {
+      const { data: admissionData, error: admissionFetchError } = await supabase
+        .from("admissions")
+        .select("organization_id")
+        .eq("id", enrollingAdmission.id)
+        .single();
+
+      if (admissionFetchError || !admissionData?.organization_id) {
+        setEnrollmentFormError("Unable to determine organization for this admission. Please try again.");
+        setEnrollingId(null);
+        return;
+      }
+      admissionOrgId = admissionData.organization_id;
     }
 
     // Update admission status to "enrolled" (authoritative source)
     const { error: updateError } = await supabase
       .from("admissions")
       .update({ status: "enrolled" })
-      .eq("id", admission.id);
+      .eq("id", enrollingAdmission.id);
 
     if (updateError) {
       console.error("Error updating admission:", updateError);
-      setError(updateError.message || "Failed to enroll admission.");
+      setEnrollmentFormError(updateError.message || "Failed to enroll admission.");
       setEnrollingId(null);
       return;
     }
 
     // INVARIANT ENFORCEMENT: Create student with admission_id (required for traceability)
-    // Removed invalid assumption: creating students without admission_id violates traceability
-    const studentData = {
-      first_name: admission.first_name,
-      last_name: admission.last_name,
-      email: admission.email,
-      admission_id: admission.id, // Required for 1:1 traceability
+    // Include organization_id and set both legal and legacy name fields
+    const studentData: any = {
+      organization_id: admissionOrgId,
+      legal_first_name: enrollingAdmission.first_name,
+      legal_last_name: enrollingAdmission.last_name,
+      first_name: enrollingAdmission.first_name, // Legacy field for backward compatibility
+      last_name: enrollingAdmission.last_name, // Legacy field for backward compatibility
+      admission_id: enrollingAdmission.id, // Required for 1:1 traceability
     };
+
+    // Set email fields if provided in enrollment form
+    if (email) {
+      studentData.email = email; // Legacy field
+      studentData.primary_email = email; // New field
+    }
+
+    // Set date of birth if provided
+    if (dateOfBirth) {
+      studentData.date_of_birth = dateOfBirth;
+    }
 
     const { data: studentResult, error: createError } = await supabase.from("students").insert([studentData]).select().single();
 
@@ -581,22 +958,28 @@ export default function AdmissionsPage() {
     // Refresh admissions list
     const { data } = await supabase
       .from("admissions")
-      .select("id, school_id, program_id, section_id, school_year_id, first_name, last_name, email, status, created_at")
+      .select("id, organization_id, school_id, program_id, section_id, school_year_id, first_name, last_name, email, status, created_at")
       .order("created_at", { ascending: false });
 
     if (data) {
       setAdmissions(data);
       
       // Update student ID map for the newly enrolled admission
-      if (studentResult?.id && admission.id) {
+      if (studentResult?.id && enrollingAdmission.id) {
         const newMap = new Map(studentIdMap);
-        newMap.set(admission.id, studentResult.id);
+        newMap.set(enrollingAdmission.id, studentResult.id);
         setStudentIdMap(newMap);
       }
       
       setError(null);
-      setSuccessMessage(`Successfully enrolled ${admission.first_name} ${admission.last_name}`);
+      setSuccessMessage(`Successfully enrolled ${enrollingAdmission.first_name} ${enrollingAdmission.last_name}`);
       setEnrollingId(null);
+      
+      // Close enrollment dialog and reset form
+      setIsEnrollmentDialogOpen(false);
+      setEnrollingAdmission(null);
+      setEnrollmentFormData({ email: "", date_of_birth: "", middle_initial: "" });
+      setEnrollmentFormError(null);
       
       // Redirect to student detail page after 1.5 seconds
       if (studentResult?.id) {
@@ -1048,7 +1431,7 @@ export default function AdmissionsPage() {
                             variant="ghost"
                             size="sm"
                             onClick={() => handleEnroll(admission)}
-                            disabled={enrollingId === admission.id}
+                            disabled={enrollingId === admission.id || (isEnrollmentDialogOpen && enrollingAdmission?.id === admission.id)}
                             className="gap-1 text-green-600 hover:text-green-700 disabled:opacity-50"
                           >
                             {enrollingId === admission.id ? (
@@ -1316,6 +1699,141 @@ export default function AdmissionsPage() {
             </Button>
             <Button onClick={handleSubmit}>
               Create
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Enrollment Dialog */}
+      <Dialog 
+        open={isEnrollmentDialogOpen} 
+        onOpenChange={(open) => {
+          setIsEnrollmentDialogOpen(open);
+          if (!open) {
+            // Clear form and reset state when dialog closes
+            setEnrollmentFormData({ email: "", date_of_birth: "", middle_initial: "" });
+            setEnrollmentFormError(null);
+            setEnrollingAdmission(null);
+            setEnrollingId(null);
+          }
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Enroll Student</DialogTitle>
+            <DialogDescription>
+              {enrollingAdmission 
+                ? `Please provide additional details for ${enrollingAdmission.first_name} ${enrollingAdmission.last_name}`
+                : "Please provide additional student details"}
+            </DialogDescription>
+          </DialogHeader>
+          
+          {enrollmentFormError && (
+            <div className="px-6 pt-2">
+              <div className="text-sm text-destructive bg-destructive/10 border border-destructive/20 rounded-md p-3">
+                {enrollmentFormError}
+              </div>
+            </div>
+          )}
+
+          <div className="space-y-4 py-4">
+            {/* Student Name (Read-only) */}
+            {enrollingAdmission && (
+              <div className="space-y-2">
+                <Label>Student Name</Label>
+                <Input
+                  value={`${enrollingAdmission.first_name} ${enrollingAdmission.last_name}`}
+                  readOnly
+                  className="bg-muted"
+                />
+              </div>
+            )}
+
+            {/* Middle Initial */}
+            <div className="space-y-2">
+              <Label htmlFor="middle_initial">Middle Initial</Label>
+              <Input
+                id="middle_initial"
+                value={enrollmentFormData.middle_initial}
+                onChange={(e) => {
+                  const value = e.target.value.toUpperCase().slice(0, 1);
+                  setEnrollmentFormData({ ...enrollmentFormData, middle_initial: value });
+                }}
+                placeholder="M"
+                maxLength={1}
+              />
+              <p className="text-xs text-muted-foreground">
+                Optional - Single character middle initial
+              </p>
+            </div>
+
+            {/* Email */}
+            <div className="space-y-2">
+              <Label htmlFor="enrollment_email">Email</Label>
+              <Input
+                id="enrollment_email"
+                type="email"
+                value={enrollmentFormData.email}
+                onChange={(e) =>
+                  setEnrollmentFormData({ ...enrollmentFormData, email: e.target.value })
+                }
+                placeholder="student@example.com"
+              />
+              <p className="text-xs text-muted-foreground">
+                Optional but recommended - Helps prevent duplicate enrollments
+              </p>
+            </div>
+
+            {/* Date of Birth */}
+            <div className="space-y-2">
+              <Label htmlFor="date_of_birth">Date of Birth</Label>
+              <Input
+                id="date_of_birth"
+                type="date"
+                value={enrollmentFormData.date_of_birth}
+                onChange={(e) =>
+                  setEnrollmentFormData({ ...enrollmentFormData, date_of_birth: e.target.value })
+                }
+              />
+              <p className="text-xs text-muted-foreground">
+                Optional but recommended - Helps prevent duplicate enrollments
+              </p>
+            </div>
+
+            {/* Warning if no email/DOB */}
+            {!enrollmentFormData.email && !enrollmentFormData.date_of_birth && (
+              <div className="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-md p-3">
+                <strong>Note:</strong> Providing email and/or date of birth helps prevent duplicate enrollments. Enrollment will proceed without them, but duplicate detection will be limited.
+              </div>
+            )}
+          </div>
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setIsEnrollmentDialogOpen(false);
+                setEnrollmentFormData({ email: "", date_of_birth: "", middle_initial: "" });
+                setEnrollmentFormError(null);
+                setEnrollingAdmission(null);
+                setEnrollingId(null);
+              }}
+              disabled={enrollingId !== null}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={handleEnrollmentSubmit}
+              disabled={enrollingId !== null || !enrollingAdmission}
+            >
+              {enrollingId ? (
+                <>
+                  <Loader2 className="mr-2 size-4 animate-spin" />
+                  Enrolling...
+                </>
+              ) : (
+                "Enroll Student"
+              )}
             </Button>
           </DialogFooter>
         </DialogContent>

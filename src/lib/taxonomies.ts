@@ -31,6 +31,8 @@ const SYSTEM_DEFAULTS: Record<string, TaxonomyItem[]> = {
     { id: "default-active", code: "ACTIVE", label: "Active" },
     { id: "default-inactive", code: "INACTIVE", label: "Inactive" },
     { id: "default-withdrawn", code: "WITHDRAWN", label: "Withdrawn" },
+    { id: "default-promoted", code: "PROMOTED", label: "Promoted" },
+    { id: "default-graduated", code: "GRADUATED", label: "Graduated" },
   ],
   sex: [
     { id: "default-male", code: "MALE", label: "Male" },
