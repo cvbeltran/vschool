@@ -25,6 +25,7 @@ import { Plus, Search, ArrowUpDown, ArrowUp, ArrowDown, ChevronLeft, ChevronRigh
 import { normalizeRole, canPerform } from "@/lib/rbac";
 import { useRouter } from "next/navigation";
 import { useOrganization } from "@/lib/hooks/use-organization";
+import { Badge } from "@/components/ui/badge";
 
 interface Staff {
   id: string;
@@ -37,10 +38,13 @@ interface Staff {
   email_address: string;
   mobile_number: string | null;
   created_at: string;
-  // Joined data
-  position_title_id?: string | null;
-  department_id?: string | null;
-  school_id?: string | null;
+  // Joined data - arrays to support multiple employments
+  employments?: Array<{
+    position_title_id: string | null;
+    department_id: string | null;
+    school_id: string | null;
+    is_active: boolean;
+  }>;
 }
 
 interface PositionTitle {
@@ -209,7 +213,8 @@ export default function StaffPage() {
           staff_employment (
             position_title_id,
             department_id,
-            school_id
+            school_id,
+            is_active
           )
         `);
       
@@ -226,17 +231,15 @@ export default function StaffPage() {
         return;
       }
 
-      // Transform data to flatten employment info
+      // Transform data to include all active employments
       const transformedData = (data || []).map((s: any) => {
-        const employment = Array.isArray(s.staff_employment) && s.staff_employment.length > 0
-          ? s.staff_employment[0]
-          : null;
+        const employments = Array.isArray(s.staff_employment) 
+          ? s.staff_employment.filter((emp: any) => emp.is_active === true)
+          : [];
         
         return {
           ...s,
-          position_title_id: employment?.position_title_id || null,
-          department_id: employment?.department_id || null,
-          school_id: employment?.school_id || null,
+          employments: employments.length > 0 ? employments : [],
         };
       });
 
@@ -266,6 +269,33 @@ export default function StaffPage() {
     if (!schoolId) return "—";
     const school = schools.find((s) => s.id === schoolId);
     return school ? school.name : "Unknown";
+  };
+
+  // Get unique schools for a staff member
+  const getStaffSchools = (member: Staff): string[] => {
+    if (!member.employments || member.employments.length === 0) return [];
+    const schoolIds = member.employments
+      .map(emp => emp.school_id)
+      .filter((id): id is string => id !== null);
+    return Array.from(new Set(schoolIds));
+  };
+
+  // Get unique departments for a staff member
+  const getStaffDepartments = (member: Staff): string[] => {
+    if (!member.employments || member.employments.length === 0) return [];
+    const deptIds = member.employments
+      .map(emp => emp.department_id)
+      .filter((id): id is string => id !== null);
+    return Array.from(new Set(deptIds));
+  };
+
+  // Get unique positions for a staff member
+  const getStaffPositions = (member: Staff): string[] => {
+    if (!member.employments || member.employments.length === 0) return [];
+    const positionIds = member.employments
+      .map(emp => emp.position_title_id)
+      .filter((id): id is string => id !== null);
+    return Array.from(new Set(positionIds));
   };
 
   const handleCreate = () => {
@@ -354,19 +384,28 @@ export default function StaffPage() {
       }
     }
 
-    // Position filter
-    if (filterPosition !== "all" && member.position_title_id !== filterPosition) {
-      return false;
+    // Position filter - check if any employment matches
+    if (filterPosition !== "all") {
+      const positions = getStaffPositions(member);
+      if (!positions.includes(filterPosition)) {
+        return false;
+      }
     }
 
-    // Department filter
-    if (filterDepartment !== "all" && member.department_id !== filterDepartment) {
-      return false;
+    // Department filter - check if any employment matches
+    if (filterDepartment !== "all") {
+      const departments = getStaffDepartments(member);
+      if (!departments.includes(filterDepartment)) {
+        return false;
+      }
     }
 
-    // School filter
-    if (filterSchool !== "all" && member.school_id !== filterSchool) {
-      return false;
+    // School filter - check if any employment matches
+    if (filterSchool !== "all") {
+      const schoolIds = getStaffSchools(member);
+      if (!schoolIds.includes(filterSchool)) {
+        return false;
+      }
     }
 
     return true;
@@ -390,16 +429,22 @@ export default function StaffPage() {
         bValue = b.email_address.toLowerCase();
         break;
       case "position":
-        aValue = getPositionTitleLabel(a.position_title_id);
-        bValue = getPositionTitleLabel(b.position_title_id);
+        const aPositions = getStaffPositions(a);
+        const bPositions = getStaffPositions(b);
+        aValue = aPositions.length > 0 ? getPositionTitleLabel(aPositions[0]) : "—";
+        bValue = bPositions.length > 0 ? getPositionTitleLabel(bPositions[0]) : "—";
         break;
       case "department":
-        aValue = getDepartmentLabel(a.department_id);
-        bValue = getDepartmentLabel(b.department_id);
+        const aDepts = getStaffDepartments(a);
+        const bDepts = getStaffDepartments(b);
+        aValue = aDepts.length > 0 ? getDepartmentLabel(aDepts[0]) : "—";
+        bValue = bDepts.length > 0 ? getDepartmentLabel(bDepts[0]) : "—";
         break;
       case "school":
-        aValue = getSchoolName(a.school_id);
-        bValue = getSchoolName(b.school_id);
+        const aSchools = getStaffSchools(a);
+        const bSchools = getStaffSchools(b);
+        aValue = aSchools.length > 0 ? getSchoolName(aSchools[0]) : "—";
+        bValue = bSchools.length > 0 ? getSchoolName(bSchools[0]) : "—";
         break;
       case "created_at":
         aValue = new Date(a.created_at).getTime();
@@ -651,13 +696,58 @@ export default function StaffPage() {
                       <td className="px-4 py-3 text-sm">{fullName}</td>
                       <td className="px-4 py-3 text-sm">{member.email_address}</td>
                       <td className="px-4 py-3 text-sm">
-                        {getPositionTitleLabel(member.position_title_id)}
+                        {(() => {
+                          const positions = getStaffPositions(member);
+                          if (positions.length === 0) return "—";
+                          if (positions.length === 1) {
+                            return getPositionTitleLabel(positions[0]);
+                          }
+                          return (
+                            <div className="flex flex-wrap gap-1">
+                              {positions.map((posId) => (
+                                <Badge key={posId} variant="outline" className="text-xs">
+                                  {getPositionTitleLabel(posId)}
+                                </Badge>
+                              ))}
+                            </div>
+                          );
+                        })()}
                       </td>
                       <td className="px-4 py-3 text-sm">
-                        {getDepartmentLabel(member.department_id)}
+                        {(() => {
+                          const depts = getStaffDepartments(member);
+                          if (depts.length === 0) return "—";
+                          if (depts.length === 1) {
+                            return getDepartmentLabel(depts[0]);
+                          }
+                          return (
+                            <div className="flex flex-wrap gap-1">
+                              {depts.map((deptId) => (
+                                <Badge key={deptId} variant="outline" className="text-xs">
+                                  {getDepartmentLabel(deptId)}
+                                </Badge>
+                              ))}
+                            </div>
+                          );
+                        })()}
                       </td>
                       <td className="px-4 py-3 text-sm">
-                        {getSchoolName(member.school_id)}
+                        {(() => {
+                          const schoolIds = getStaffSchools(member);
+                          if (schoolIds.length === 0) return "—";
+                          if (schoolIds.length === 1) {
+                            return getSchoolName(schoolIds[0]);
+                          }
+                          return (
+                            <div className="flex flex-wrap gap-1">
+                              {schoolIds.map((schoolId) => (
+                                <Badge key={schoolId} variant="outline" className="text-xs">
+                                  {getSchoolName(schoolId)}
+                                </Badge>
+                              ))}
+                            </div>
+                          );
+                        })()}
                       </td>
                       <td className="px-4 py-3 text-sm">{formatDate(member.created_at)}</td>
                       <td className="px-4 py-3">

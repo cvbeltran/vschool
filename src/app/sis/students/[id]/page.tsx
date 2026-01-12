@@ -22,6 +22,8 @@ import { normalizeRole, canPerform } from "@/lib/rbac";
 import { Badge } from "@/components/ui/badge";
 import { fetchMultipleTaxonomies, getSmartDefault, type TaxonomyItem, type TaxonomyFetchResult } from "@/lib/taxonomies";
 import { STUDENT_COLUMNS, TAXONOMY_KEYS } from "@/lib/constants/student-columns";
+import { useOrganization } from "@/lib/hooks/use-organization";
+import { ToastContainer, type Toast } from "@/components/ui/toast";
 
 interface Student {
   id: string;
@@ -116,6 +118,7 @@ export default function StudentDetailPage() {
   const [saving, setSaving] = useState(false);
   const [role, setRole] = useState<"principal" | "admin" | "teacher">("principal");
   const [originalRole, setOriginalRole] = useState<string | null>(null);
+  const { organizationId, isLoading: orgLoading } = useOrganization();
   
   // URL-based tab persistence: read from query param, default to "overview"
   const tabFromUrl = searchParams.get("tab") || "overview";
@@ -133,6 +136,18 @@ export default function StudentDetailPage() {
   // Form state
   const [formData, setFormData] = useState<Partial<Student>>({});
   const [formDataInitialized, setFormDataInitialized] = useState(false);
+
+  // Toast notifications
+  const [toasts, setToasts] = useState<Toast[]>([]);
+
+  const showToast = (message: string, type: Toast["type"] = "success") => {
+    const id = Math.random().toString(36).substring(7);
+    setToasts((prev) => [...prev, { id, message, type }]);
+  };
+
+  const removeToast = (id: string) => {
+    setToasts((prev) => prev.filter((toast) => toast.id !== id));
+  };
 
   // Tab change handler: update URL without full reload
   const handleTabChange = (value: string) => {
@@ -297,6 +312,7 @@ export default function StudentDetailPage() {
         .from("students")
         .select(`
           id,
+          organization_id,
           legal_first_name,
           legal_last_name,
           preferred_name,
@@ -382,19 +398,34 @@ export default function StudentDetailPage() {
             
             // ONE-TIME HYDRATION GUARD: Only initialize formData once per studentId
             if (hydrationGuardRef.current !== studentId) {
-              // Apply smart defaults if fields are empty (sex requires explicit choice, no default)
-              const defaultedLegacy: Partial<Student> = {
+              // Normalize status and entry_type like other taxonomy fields
+              const normalizedLegacyWithStatus: Partial<Student> = {
                 ...normalizedLegacy,
-                status: normalizedLegacy.status || getSmartDefault("student_status") || "",
+                status: normalizedLegacy.status ? String(normalizedLegacy.status).trim() : null,
+                entry_type: normalizedLegacy.entry_type ? String(normalizedLegacy.entry_type).trim() : null,
                 // sex: No default - requires explicit user choice
               };
-              setFormData(defaultedLegacy);
+              setFormData(normalizedLegacyWithStatus);
               setFormDataInitialized(true);
               hydrationGuardRef.current = studentId;
               
               // Fetch taxonomies with explicit current values
-              setTimeout(() => {
-                fetchTaxonomies(defaultedLegacy);
+              // After taxonomies load, set default status UUID if needed
+              setTimeout(async () => {
+                await fetchTaxonomies(normalizedLegacyWithStatus);
+                // If status is null/empty and we have a default code, find the UUID
+                if (!normalizedLegacyWithStatus.status) {
+                  const defaultCode = getSmartDefault("student_status");
+                  if (defaultCode) {
+                    // Wait a tick for statusOptions to be set
+                    setTimeout(() => {
+                      const defaultStatusItem = statusOptions.find(item => item.code === defaultCode);
+                      if (defaultStatusItem) {
+                        setFormData((prev) => ({ ...prev, status: defaultStatusItem.id }));
+                      }
+                    }, 0);
+                  }
+                }
               }, 0);
             }
             
@@ -460,6 +491,8 @@ export default function StudentDetailPage() {
           economic_status_id: studentData.economic_status_id ? String(studentData.economic_status_id).trim() : null,
           primary_language_id: studentData.primary_language_id ? String(studentData.primary_language_id).trim() : null,
           guardian_relationship_id: studentData.guardian_relationship_id ? String(studentData.guardian_relationship_id).trim() : null,
+          status: studentData.status ? String(studentData.status).trim() : null,
+          entry_type: studentData.entry_type ? String(studentData.entry_type).trim() : null,
         };
         setStudent(normalizedStudent);
         
@@ -479,10 +512,10 @@ export default function StudentDetailPage() {
         const shouldInitialize = hydrationGuardRef.current !== studentId;
         
         // Apply smart defaults if fields are empty (sex requires explicit choice, no default)
-        // Preserve all fetched values including economic_status_id
+        // Preserve all fetched values including status (already normalized as UUID string or null)
         const defaultedStudent: Partial<Student> = {
           ...normalizedStudent,
-          status: normalizedStudent.status || getSmartDefault("student_status") || "",
+          // status: Already normalized as UUID string or null - preserve as is
           // sex: No default - requires explicit user choice
           // economic_status_id: Preserve fetched value (null or UUID string)
         };
@@ -507,8 +540,22 @@ export default function StudentDetailPage() {
         }
         
         // Fetch taxonomies with explicit current values to avoid stale closure
-        setTimeout(() => {
-          fetchTaxonomies(defaultedStudent);
+        // After taxonomies load, set default status UUID if needed
+        setTimeout(async () => {
+          await fetchTaxonomies(defaultedStudent);
+          // If status is null/empty and we have a default code, find the UUID
+          if (!defaultedStudent.status) {
+            const defaultCode = getSmartDefault("student_status");
+            if (defaultCode) {
+              // Wait a tick for statusOptions to be set
+              setTimeout(() => {
+                const defaultStatusItem = statusOptions.find(item => item.code === defaultCode);
+                if (defaultStatusItem) {
+                  setFormData((prev) => ({ ...prev, status: defaultStatusItem.id }));
+                }
+              }, 0);
+            }
+          }
         }, 0);
 
         // Fetch guardian data from new guardians table
@@ -754,7 +801,22 @@ export default function StudentDetailPage() {
       if (formData.nationality !== undefined) updatePayload.nationality = formData.nationality || null;
       if (formData.student_number !== undefined) updatePayload.student_number = formData.student_number || null;
       if (formData.student_lrn !== undefined) updatePayload.student_lrn = formData.student_lrn || null;
-      if (formData.status !== undefined) updatePayload.status = formData.status || null;
+      // status: Handle UUID string or null - reject system default IDs
+      if (formData.status !== undefined) {
+        const statusValue = formData.status;
+        if (statusValue && typeof statusValue === "string" && statusValue.trim() !== "") {
+          // Only save if it's a valid UUID (not a system default like "default-active")
+          if (isValidUUID(statusValue.trim())) {
+            updatePayload.status = statusValue.trim();
+          } else {
+            // System default ID - don't save (set to null)
+            // User needs to select a real taxonomy item from the database
+            updatePayload.status = null;
+          }
+        } else {
+          updatePayload.status = null;
+        }
+      }
     } else if (tab === "contact") {
       if (formData.primary_email !== undefined) updatePayload.primary_email = formData.primary_email || null;
       if (formData.phone !== undefined) updatePayload.phone = formData.phone || null;
@@ -866,10 +928,39 @@ export default function StudentDetailPage() {
           }
 
           if (!guardianId) {
+            // Get organization_id from student, organizationId hook, or user profile
+            let guardianOrgId: string | null = null;
+            
+            // Try to get from student first
+            if (student?.organization_id) {
+              guardianOrgId = student.organization_id;
+            } else if (organizationId) {
+              // Use organizationId from hook
+              guardianOrgId = organizationId;
+            } else {
+              // Fallback: get from user profile
+              const { data: { session } } = await supabase.auth.getSession();
+              if (session) {
+                const { data: profile } = await supabase
+                  .from("profiles")
+                  .select("organization_id")
+                  .eq("id", session.user.id)
+                  .single();
+                guardianOrgId = profile?.organization_id || null;
+              }
+            }
+            
+            if (!guardianOrgId) {
+              setError("Unable to determine organization for guardian. Please ensure student has an organization.");
+              setSaving(false);
+              return;
+            }
+            
             // Create new guardian
             const { data: newGuardian, error: createGuardianError } = await supabase
               .from("guardians")
               .insert({
+                organization_id: guardianOrgId,
                 name: formData.guardian_name,
                 email: formData.guardian_email || null,
                 phone: formData.guardian_phone || null,
@@ -956,7 +1047,22 @@ export default function StudentDetailPage() {
       if (formData.special_needs_flag !== undefined) updatePayload.special_needs_flag = formData.special_needs_flag || null;
     } else if (tab === "education") {
       if (formData.previous_school !== undefined) updatePayload.previous_school = formData.previous_school || null;
-      if (formData.entry_type !== undefined) updatePayload.entry_type = formData.entry_type || null;
+      // entry_type: Handle UUID string or null - reject system default IDs
+      if (formData.entry_type !== undefined) {
+        const entryTypeValue = formData.entry_type;
+        if (entryTypeValue && typeof entryTypeValue === "string" && entryTypeValue.trim() !== "") {
+          // Only save if it's a valid UUID (not a system default)
+          if (isValidUUID(entryTypeValue.trim())) {
+            updatePayload.entry_type = entryTypeValue.trim();
+          } else {
+            // System default ID - don't save (set to null)
+            // User needs to select a real taxonomy item from the database
+            updatePayload.entry_type = null;
+          }
+        } else {
+          updatePayload.entry_type = null;
+        }
+      }
       if (formData.notes !== undefined) updatePayload.notes = formData.notes || null;
     }
 
@@ -1010,6 +1116,15 @@ export default function StudentDetailPage() {
         }));
       }
 
+      // Success toast for guardians tab
+      const tabNames: Record<string, string> = {
+        identity: "Identity",
+        contact: "Contact",
+        guardians: "Guardians",
+        demographics: "Demographics",
+        education: "Education",
+      };
+      showToast(`${tabNames[tab] || "Information"} updated successfully!`);
       setSaving(false);
       setError(null);
       return;
@@ -1131,7 +1246,7 @@ export default function StudentDetailPage() {
         const mergedData: Partial<Student> = {
           ...prevFormData, // Preserve unsaved changes
           ...normalizedStudent, // Override with saved values
-          status: normalizedStudent.status || getSmartDefault("student_status") || prevFormData.status || "",
+          // status is already a UUID from database, keep it as is
         };
         // Refetch taxonomies with updated values
         setTimeout(() => {
@@ -1140,6 +1255,17 @@ export default function StudentDetailPage() {
         return mergedData;
       });
       setFormDataInitialized(true);
+    }
+
+    // Success toast for non-guardians tabs
+    const tabNames: Record<string, string> = {
+      identity: "Identity",
+      contact: "Contact",
+      demographics: "Demographics",
+      education: "Education",
+    };
+    if (tabNames[tab]) {
+      showToast(`${tabNames[tab]} updated successfully!`);
     }
 
     setSaving(false);
@@ -1488,19 +1614,26 @@ export default function StudentDetailPage() {
               <div className="space-y-2">
                 <Label htmlFor="status">Status</Label>
                 <Select
-                  value={formData.status || getSmartDefault("student_status") || ""}
-                  onValueChange={(value) => setFormData({ ...formData, status: value })}
+                  value={formData.status || ""}
+                  onValueChange={(value) => {
+                    // Value is already a UUID from Select (item.id)
+                    setFormData({ ...formData, status: value || null });
+                  }}
                   disabled={!canEdit || isWithdrawn()}
                 >
                   <SelectTrigger>
                     <SelectValue placeholder="Select status" />
                   </SelectTrigger>
                   <SelectContent>
-                    {statusOptions.map((item) => (
-                      <SelectItem key={item.id} value={item.code}>
-                        {item.label}
-                      </SelectItem>
-                    ))}
+                    {statusOptions.length === 0 ? (
+                      <div className="px-2 py-1.5 text-sm text-muted-foreground">No options configured</div>
+                    ) : (
+                      statusOptions.map((item) => (
+                        <SelectItem key={item.id} value={item.id}>
+                          {item.label}
+                        </SelectItem>
+                      ))
+                    )}
                   </SelectContent>
                 </Select>
                 {taxonomyDefaults.has("student_status") && taxonomyDefaults.get("student_status") && (
@@ -1858,19 +1991,26 @@ export default function StudentDetailPage() {
               <div className="space-y-2">
                 <Label htmlFor="entry_type">Entry Type</Label>
                 <Select
-                  value={formData.entry_type || ""}
-                  onValueChange={(value) => setFormData({ ...formData, entry_type: value })}
+                  value={formData.entry_type ? String(formData.entry_type).trim() : ""}
+                  onValueChange={(value) => {
+                    // Value is already a UUID from Select (item.id)
+                    setFormData({ ...formData, entry_type: value ? value.trim() : null });
+                  }}
                   disabled={!canEdit || isWithdrawn()}
                 >
                   <SelectTrigger>
                     <SelectValue placeholder="Select entry type" />
                   </SelectTrigger>
                   <SelectContent>
-                    {entryTypeOptions.map((item) => (
-                      <SelectItem key={item.id} value={item.code}>
-                        {item.label}
-                      </SelectItem>
-                    ))}
+                    {entryTypeOptions.length === 0 ? (
+                      <div className="px-2 py-1.5 text-sm text-muted-foreground">No options configured</div>
+                    ) : (
+                      entryTypeOptions.map((item) => (
+                        <SelectItem key={item.id} value={item.id}>
+                          {item.label}
+                        </SelectItem>
+                      ))
+                    )}
                   </SelectContent>
                 </Select>
                 {taxonomyDefaults.has("entry_type") && taxonomyDefaults.get("entry_type") && (
@@ -1926,6 +2066,7 @@ export default function StudentDetailPage() {
           </Card>
         </TabsContent>
       </Tabs>
+      <ToastContainer toasts={toasts} onClose={removeToast} />
     </div>
   );
 }

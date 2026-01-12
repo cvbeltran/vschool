@@ -271,9 +271,29 @@ export default function SectionsPage() {
         return;
       }
     } else {
+      // Determine organization_id: use from hook if available, otherwise derive from program
+      let finalOrganizationId = organizationId;
+      
+      if (!finalOrganizationId) {
+        // Super admin case: derive organization_id from the selected program
+        const { data: programData, error: programError } = await supabase
+          .from("programs")
+          .select("organization_id")
+          .eq("id", formData.program_id)
+          .single();
+        
+        if (programError || !programData?.organization_id) {
+          setError("Unable to determine organization. Please try again.");
+          return;
+        }
+        
+        finalOrganizationId = programData.organization_id;
+      }
+
       // Create new section
       const { error: createError } = await supabase.from("sections").insert([
         {
+          organization_id: finalOrganizationId,
           school_id: formData.school_id,
           program_id: formData.program_id,
           code: formData.code,

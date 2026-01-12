@@ -25,6 +25,7 @@ import { Plus, Pencil, Trash2 } from "lucide-react";
 import { normalizeRole, canPerform } from "@/lib/rbac";
 import { fetchTaxonomyItems, getSmartDefault } from "@/lib/taxonomies";
 import type { TaxonomyItem } from "@/lib/taxonomies";
+import { useOrganization } from "@/lib/hooks/use-organization";
 
 interface SchoolYear {
   id: string;
@@ -54,6 +55,7 @@ function generateYearLabel(startDate: string, endDate: string): string {
 }
 
 export default function CalendarSettingsPage() {
+  const { organizationId, isSuperAdmin, isLoading: orgLoading } = useOrganization();
   const [schoolYears, setSchoolYears] = useState<SchoolYear[]>([]);
   const [statusOptions, setStatusOptions] = useState<TaxonomyItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -78,6 +80,8 @@ export default function CalendarSettingsPage() {
 
   useEffect(() => {
     const fetchData = async () => {
+      if (orgLoading) return; // Wait for organization context
+      
       // Fetch user role
       const {
         data: { session },
@@ -101,8 +105,8 @@ export default function CalendarSettingsPage() {
         setStatusOptions(statusResult.items);
       }
 
-      // Fetch school years with status label
-      const { data: schoolYearsData, error: schoolYearsError } = await supabase
+      // Fetch school years with status label - filter by organization_id unless super admin
+      let schoolYearsQuery = supabase
         .from("school_years")
         .select(`
           id,
@@ -115,7 +119,13 @@ export default function CalendarSettingsPage() {
           taxonomy_items:status_id (
             label
           )
-        `)
+        `);
+      
+      if (!isSuperAdmin && organizationId) {
+        schoolYearsQuery = schoolYearsQuery.eq("organization_id", organizationId);
+      }
+      
+      const { data: schoolYearsData, error: schoolYearsError } = await schoolYearsQuery
         .order("start_date", { ascending: false });
 
       if (schoolYearsError) {
@@ -142,8 +152,10 @@ export default function CalendarSettingsPage() {
       setLoading(false);
     };
 
-    fetchData();
-  }, []);
+    if (!orgLoading) {
+      fetchData();
+    }
+  }, [organizationId, isSuperAdmin, orgLoading]);
 
   // Auto-generate year_label when dates change and validate dates
   useEffect(() => {
@@ -215,6 +227,34 @@ export default function CalendarSettingsPage() {
   const confirmDelete = async () => {
     if (!deletingSchoolYear) return;
 
+    // Check if there are any admissions using this school year
+    let admissionsQuery = supabase
+      .from("admissions")
+      .select("id")
+      .eq("school_year_id", deletingSchoolYear.id)
+      .limit(1);
+    
+    // Filter by organization_id unless super admin
+    if (!isSuperAdmin && organizationId) {
+      admissionsQuery = admissionsQuery.eq("organization_id", organizationId);
+    }
+    
+    const { data: admissionsData, error: admissionsError } = await admissionsQuery;
+
+    if (admissionsError) {
+      console.error("Error checking admissions:", admissionsError);
+      setError("Failed to check if school year is in use. Please try again.");
+      setIsDeleteDialogOpen(false);
+      return;
+    }
+
+    if (admissionsData && admissionsData.length > 0) {
+      setError(`Cannot delete school year "${deletingSchoolYear.year_label}" because it is being used by existing admission applications. Please remove or reassign the admissions first.`);
+      setIsDeleteDialogOpen(false);
+      setDeletingSchoolYear(null);
+      return;
+    }
+
     const { error: deleteError } = await supabase
       .from("school_years")
       .delete()
@@ -227,8 +267,8 @@ export default function CalendarSettingsPage() {
       return;
     }
 
-    // Refresh list
-    const { data: schoolYearsData, error: schoolYearsError } = await supabase
+    // Refresh list - filter by organization_id unless super admin
+    let refreshQuery = supabase
       .from("school_years")
       .select(`
         id,
@@ -241,7 +281,13 @@ export default function CalendarSettingsPage() {
         taxonomy_items:status_id (
           label
         )
-      `)
+      `);
+    
+    if (!isSuperAdmin && organizationId) {
+      refreshQuery = refreshQuery.eq("organization_id", organizationId);
+    }
+    
+    const { data: schoolYearsData, error: schoolYearsError } = await refreshQuery
       .order("start_date", { ascending: false });
 
     if (!schoolYearsError && schoolYearsData) {
@@ -256,6 +302,9 @@ export default function CalendarSettingsPage() {
         updated_at: sy.updated_at,
       }));
       setSchoolYears(transformedData);
+      setError(null); // Clear any previous errors on successful delete
+    } else if (schoolYearsError) {
+      setError(schoolYearsError.message || "Failed to refresh school years list.");
     }
 
     setIsDeleteDialogOpen(false);
@@ -302,10 +351,17 @@ export default function CalendarSettingsPage() {
       // Find all currently ACTIVE school years (excluding the one being edited)
       const activeStatus = statusOptions.find((s) => s.code === "ACTIVE");
       if (activeStatus) {
-        const { data: activeSchoolYears } = await supabase
+        let activeSchoolYearsQuery = supabase
           .from("school_years")
           .select("id")
           .eq("status_id", activeStatus.id);
+        
+        // Filter by organization_id unless super admin
+        if (!isSuperAdmin && organizationId) {
+          activeSchoolYearsQuery = activeSchoolYearsQuery.eq("organization_id", organizationId);
+        }
+        
+        const { data: activeSchoolYears } = await activeSchoolYearsQuery;
 
         if (activeSchoolYears && activeSchoolYears.length > 0) {
           // Filter out the current school year if editing
@@ -334,15 +390,26 @@ export default function CalendarSettingsPage() {
     }
 
     if (!editingSchoolYear) {
+      // Determine organization_id: use from hook if available
+      if (!organizationId && !isSuperAdmin) {
+        setError("User is not associated with an organization.");
+        return;
+      }
+
       // Create new school year
-      const { error: createError } = await supabase.from("school_years").insert([
-        {
-          start_date: formData.start_date,
-          end_date: formData.end_date,
-          year_label: yearLabel,
-          status_id: formData.status_id,
-        },
-      ]);
+      const insertPayload: any = {
+        start_date: formData.start_date,
+        end_date: formData.end_date,
+        year_label: yearLabel,
+        status_id: formData.status_id,
+      };
+
+      // Include organization_id if available (required for non-super admins)
+      if (organizationId) {
+        insertPayload.organization_id = organizationId;
+      }
+
+      const { error: createError } = await supabase.from("school_years").insert([insertPayload]);
 
       if (createError) {
         console.error("Create school year error:", createError);
@@ -368,8 +435,8 @@ export default function CalendarSettingsPage() {
       }
     }
 
-    // Refresh school years list
-    const { data: schoolYearsData, error: schoolYearsError } = await supabase
+    // Refresh school years list - filter by organization_id unless super admin
+    let refreshQuery = supabase
       .from("school_years")
       .select(`
         id,
@@ -382,7 +449,13 @@ export default function CalendarSettingsPage() {
         taxonomy_items:status_id (
           label
         )
-      `)
+      `);
+    
+    if (!isSuperAdmin && organizationId) {
+      refreshQuery = refreshQuery.eq("organization_id", organizationId);
+    }
+    
+    const { data: schoolYearsData, error: schoolYearsError } = await refreshQuery
       .order("start_date", { ascending: false });
 
     if (schoolYearsError) {
@@ -624,7 +697,16 @@ export default function CalendarSettingsPage() {
       </Dialog>
 
       {/* Delete Confirmation Dialog */}
-      <Dialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
+      <Dialog 
+        open={isDeleteDialogOpen} 
+        onOpenChange={(open) => {
+          setIsDeleteDialogOpen(open);
+          if (!open) {
+            setError(null); // Clear errors when dialog closes
+            setDeletingSchoolYear(null);
+          }
+        }}
+      >
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Delete School Year</DialogTitle>

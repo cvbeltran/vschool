@@ -233,8 +233,10 @@ export default function EnrollmentsPage() {
       setLoading(false);
     };
 
-    fetchData();
-  }, []);
+    if (!orgLoading) {
+      fetchData();
+    }
+  }, [orgLoading, organizationId, isSuperAdmin]);
 
   // Reset to page 1 when filters change
   useEffect(() => {
