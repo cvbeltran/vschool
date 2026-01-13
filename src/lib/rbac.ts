@@ -62,7 +62,13 @@ export type Resource =
   | "attendance"
   | "taxonomies"
   | "school_years"
-  | "staff";
+  | "staff"
+  | "obs_domains"
+  | "obs_competencies"
+  | "obs_indicators"
+  | "obs_levels"
+  | "ams_experiences"
+  | "ams_observations";
 
 /**
  * Check if a role can view a navigation item
@@ -140,11 +146,27 @@ export function canPerform(
     if (["students", "admissions", "batches", "attendance", "staff"].includes(resource)) {
       return action === "create" || action === "update" || action === "delete" || action === "export";
     }
+    // OBS resources: Principal can create/update/delete all OBS structures
+    if (["obs_domains", "obs_competencies", "obs_indicators", "obs_levels"].includes(resource)) {
+      return action === "create" || action === "update" || action === "delete";
+    }
+    // AMS resources: Principal can create/update/delete experiences and observations
+    if (["ams_experiences", "ams_observations"].includes(resource)) {
+      return action === "create" || action === "update" || action === "delete";
+    }
     return false;
   }
   
-  // Teacher can only view (no create/update/delete)
+  // Teacher: Can create experiences and observations (their own), view OBS
   if (role === "teacher") {
+    // Teachers can create experiences and observations
+    if (["ams_experiences", "ams_observations"].includes(resource)) {
+      return action === "create" || action === "update";
+    }
+    // Teachers can view OBS but not modify
+    if (["obs_domains", "obs_competencies", "obs_indicators", "obs_levels"].includes(resource)) {
+      return false; // View only, handled by RLS
+    }
     return false;
   }
   
@@ -179,6 +201,14 @@ export function canPerform(
     // Can create/update/delete students, admissions, batches, attendance, staff
     if (["students", "admissions", "batches", "attendance", "staff"].includes(resource)) {
       return action === "create" || action === "update" || action === "delete" || action === "export";
+    }
+    // OBS resources: Admin can create/update/delete all OBS structures
+    if (["obs_domains", "obs_competencies", "obs_indicators", "obs_levels"].includes(resource)) {
+      return action === "create" || action === "update" || action === "delete";
+    }
+    // AMS resources: Admin can create/update/delete experiences and observations
+    if (["ams_experiences", "ams_observations"].includes(resource)) {
+      return action === "create" || action === "update" || action === "delete";
     }
   }
   

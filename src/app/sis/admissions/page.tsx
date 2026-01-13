@@ -1662,16 +1662,16 @@ export default function AdmissionsPage() {
                   <div className="space-y-2">
                     <Label htmlFor="section_id">Section (Optional)</Label>
                     <Select
-                      value={formData.section_id}
+                      value={formData.section_id || "none"}
                       onValueChange={(value) =>
-                        setFormData({ ...formData, section_id: value })
+                        setFormData({ ...formData, section_id: value === "none" ? "" : value })
                       }
                     >
                       <SelectTrigger>
                         <SelectValue placeholder="Select section (optional)" />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="">None</SelectItem>
+                        <SelectItem value="none">None</SelectItem>
                         {formSections.map((section) => (
                           <SelectItem key={section.id} value={section.id}>
                             {section.name} ({section.code})

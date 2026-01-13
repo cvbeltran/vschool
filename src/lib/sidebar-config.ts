@@ -20,6 +20,15 @@ import {
   FolderTree,
   Building2,
   Shield,
+  Target,
+  ListChecks,
+  Layers,
+  Eye,
+  Award,
+  Scale,
+  ClipboardCheck,
+  FileCheck,
+  FileBarChart,
 } from "lucide-react";
 import { LucideIcon } from "lucide-react";
 
@@ -37,6 +46,8 @@ export interface SidebarItem {
 export interface SidebarSection {
   label?: string;
   items: SidebarItem[];
+  collapsible?: boolean; // Whether the section can be collapsed
+  defaultCollapsed?: boolean; // Default collapsed state
 }
 
 /**
@@ -55,6 +66,8 @@ export const sidebarConfig: SidebarSection[] = [
   },
   {
     label: "Admissions",
+    collapsible: true,
+    defaultCollapsed: false,
     items: [
       {
         label: "Admissions",
@@ -72,6 +85,8 @@ export const sidebarConfig: SidebarSection[] = [
   },
   {
     label: "People",
+    collapsible: true,
+    defaultCollapsed: false,
     items: [
       {
         label: "Students",
@@ -95,6 +110,8 @@ export const sidebarConfig: SidebarSection[] = [
   },
   {
     label: "Operations",
+    collapsible: true,
+    defaultCollapsed: false,
     items: [
       {
         label: "Attendance",
@@ -118,6 +135,8 @@ export const sidebarConfig: SidebarSection[] = [
   },
   {
     label: "Communications",
+    collapsible: true,
+    defaultCollapsed: false,
     items: [
       {
         label: "Communications",
@@ -128,7 +147,127 @@ export const sidebarConfig: SidebarSection[] = [
     ],
   },
   {
+    label: "OBS",
+    collapsible: true,
+    defaultCollapsed: false,
+    items: [
+      {
+        label: "Domains",
+        href: "/sis/obs/domains",
+        icon: FolderTree,
+        allowedRoles: ["principal", "admin", "teacher"],
+      },
+      {
+        label: "Competencies",
+        href: "/sis/obs/competencies",
+        icon: Target,
+        allowedRoles: ["principal", "admin", "teacher"],
+      },
+      {
+        label: "Indicators",
+        href: "/sis/obs/indicators",
+        icon: ListChecks,
+        allowedRoles: ["principal", "admin", "teacher"],
+      },
+      {
+        label: "Competency Levels",
+        href: "/sis/obs/levels",
+        icon: Layers,
+        allowedRoles: ["principal", "admin", "teacher"],
+      },
+    ],
+  },
+  {
+    label: "AMS",
+    collapsible: true,
+    defaultCollapsed: false,
+    items: [
+      {
+        label: "Experiences",
+        href: "/sis/ams/experiences",
+        icon: BookOpen,
+        allowedRoles: ["principal", "admin", "teacher"],
+      },
+    ],
+  },
+  {
+    label: "Reflection & Feedback",
+    collapsible: true,
+    defaultCollapsed: false,
+    items: [
+      {
+        label: "Prompts",
+        href: "/sis/reflection/prompts",
+        icon: MessageSquare,
+        allowedRoles: ["principal", "admin", "teacher"],
+      },
+      {
+        label: "Dimensions",
+        href: "/sis/feedback/dimensions",
+        icon: Target,
+        allowedRoles: ["principal", "admin", "teacher"],
+      },
+      {
+        label: "My Reflections",
+        href: "/sis/reflection/my",
+        icon: BookOpen,
+        allowedRoles: ["principal", "admin", "teacher"],
+      },
+      {
+        label: "Student Feedback",
+        href: "/sis/feedback/my",
+        icon: MessageSquare,
+        allowedRoles: ["principal", "admin", "teacher"],
+      },
+      {
+        label: "View Feedback",
+        href: "/sis/feedback/teacher",
+        icon: Eye,
+        allowedRoles: ["principal", "admin", "teacher"],
+      },
+    ],
+  },
+  {
+    label: "Grades & Reporting",
+    collapsible: true,
+    defaultCollapsed: false,
+    items: [
+      {
+        label: "Policies",
+        href: "/sis/phase4/policies",
+        icon: Award,
+        allowedRoles: ["principal", "admin"],
+      },
+      {
+        label: "Scales",
+        href: "/sis/phase4/scales",
+        icon: Scale,
+        allowedRoles: ["principal", "admin"],
+      },
+      {
+        label: "Grade Entry",
+        href: "/sis/phase4/grade-entry",
+        icon: ClipboardCheck,
+        allowedRoles: ["principal", "admin", "teacher"],
+      },
+      {
+        label: "Review & Finalize",
+        href: "/sis/phase4/review",
+        icon: FileCheck,
+        allowedRoles: ["principal", "admin"],
+      },
+      {
+        label: "Reports",
+        href: "/sis/phase4/reports",
+        icon: FileBarChart,
+        allowedRoles: ["principal", "admin"],
+      },
+    ],
+  },
+  {
     label: "Reports",
+    collapsible: true,
+    defaultCollapsed: false,
     items: [
       {
         label: "Student Reports",
@@ -146,6 +285,8 @@ export const sidebarConfig: SidebarSection[] = [
   },
   {
     label: "Settings",
+    collapsible: true,
+    defaultCollapsed: false,
     items: [
       {
         label: "Organization",
@@ -187,6 +328,8 @@ export const sidebarConfig: SidebarSection[] = [
   },
   {
     label: "Admin",
+    collapsible: true,
+    defaultCollapsed: false,
     items: [
       {
         label: "Super Admin",

@@ -11,7 +11,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { LogOut } from "lucide-react";
+import { LogOut, ChevronDown, ChevronRight } from "lucide-react";
 import { supabase } from "@/lib/supabase/client";
 import { normalizeRole } from "@/lib/rbac";
 import { getSidebarForRole, type NormalizedRole } from "@/lib/sidebar-config";
@@ -29,6 +29,7 @@ export default function SISLayout({
   const [school, setSchool] = useState<string>("all");
   const [mounted, setMounted] = useState(false);
   const { organization, isLoading: orgLoading, isSuperAdmin, selectedOrganizationId, setSelectedOrganizationId } = useOrganization();
+  const [collapsedSections, setCollapsedSections] = useState<Set<number>>(new Set());
 
   useEffect(() => {
     setMounted(true);
@@ -72,6 +73,29 @@ export default function SISLayout({
 
   // Get filtered sidebar config for current role and super admin status
   const sidebarSections = getSidebarForRole(role, isSuperAdmin || false);
+
+  // Initialize collapsed sections based on defaultCollapsed
+  useEffect(() => {
+    const initialCollapsed = new Set<number>();
+    sidebarSections.forEach((section, index) => {
+      if (section.collapsible && section.defaultCollapsed) {
+        initialCollapsed.add(index);
+      }
+    });
+    setCollapsedSections(initialCollapsed);
+  }, [role, isSuperAdmin]); // Re-initialize when role or super admin status changes
+
+  const toggleSection = (index: number) => {
+    setCollapsedSections((prev) => {
+      const newSet = new Set(prev);
+      if (newSet.has(index)) {
+        newSet.delete(index);
+      } else {
+        newSet.add(index);
+      }
+      return newSet;
+    });
+  };
 
   const handleLogout = async () => {
     await supabase.auth.signOut();
@@ -147,32 +171,51 @@ export default function SISLayout({
         {/* Sidebar */}
         <aside className="w-full border-b bg-muted/40 md:w-64 md:border-b-0 md:border-r">
           <nav className="flex flex-row gap-1 overflow-x-auto p-2 md:flex-col md:overflow-x-visible md:p-4 md:gap-1">
-            {sidebarSections.map((section, sectionIndex) => (
-              <div key={sectionIndex} className="space-y-1">
-                {section.label && (
-                  <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-                    {section.label}
-                  </div>
-                )}
-                {section.items.map((item) => {
-                  const Icon = item.icon;
-                  const isActive = pathname === item.href || pathname?.startsWith(item.href + "/");
-                  return (
-                    <Button
-                      key={item.href}
-                      variant={isActive ? "secondary" : "ghost"}
-                      className="w-full justify-start gap-2 md:w-full"
-                      asChild
+            {sidebarSections.map((section, sectionIndex) => {
+              const isCollapsed = collapsedSections.has(sectionIndex);
+              const isCollapsible = section.collapsible && section.label;
+              
+              return (
+                <div key={sectionIndex} className="space-y-1">
+                  {section.label && (
+                    <div
+                      className={`px-2 py-1.5 text-xs font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-1 ${
+                        isCollapsible ? "cursor-pointer hover:text-foreground transition-colors" : ""
+                      }`}
+                      onClick={() => isCollapsible && toggleSection(sectionIndex)}
                     >
-                      <Link href={item.href}>
-                        <Icon className="size-4 shrink-0" />
-                        <span className="whitespace-nowrap">{item.label}</span>
-                      </Link>
-                    </Button>
-                  );
-                })}
-              </div>
-            ))}
+                      {isCollapsible && (
+                        <span className="flex items-center">
+                          {isCollapsed ? (
+                            <ChevronRight className="size-3" />
+                          ) : (
+                            <ChevronDown className="size-3" />
+                          )}
+                        </span>
+                      )}
+                      {section.label}
+                    </div>
+                  )}
+                  {!isCollapsed && section.items.map((item) => {
+                    const Icon = item.icon;
+                    const isActive = pathname === item.href || pathname?.startsWith(item.href + "/");
+                    return (
+                      <Button
+                        key={item.href}
+                        variant={isActive ? "secondary" : "ghost"}
+                        className="w-full justify-start gap-2 md:w-full"
+                        asChild
+                      >
+                        <Link href={item.href}>
+                          <Icon className="size-4 shrink-0" />
+                          <span className="whitespace-nowrap">{item.label}</span>
+                        </Link>
+                      </Button>
+                    );
+                  })}
+                </div>
+              );
+            })}
           </nav>
         </aside>
 

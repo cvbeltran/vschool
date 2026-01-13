@@ -1,0 +1,411 @@
+# Phase 4 — Grade Translation & Reporting Layer Design
+
+## A. Phase 4 Feature Overview
+
+### What Phase 4 Does
+
+Phase 4 introduces a **translation layer** that converts qualitative learning evidence (from Phase 2 OBS/AMS and Phase 3 Reflection/Feedback) into formal grades for compliance and reporting purposes. This layer operates as a **separate, read-only consumer** of learning data.
+
+**Core Functions:**
+
+1. **Grade Policy Definition**: Organizations define how learning evidence translates to grades
+   - Grading schemes (A–F, descriptors, pass/fail)
+   - Grade scales and mappings
+   - Promotion rules
+   - Transcript templates
+
+2. **Grade Records (Translation Layer)**: Human-confirmed grade entries
+   - Grades reference learners and time periods
+   - Grades may reference observations (read-only)
+   - All grades require manual confirmation before finalization
+   - Overrides require explicit justification
+
+3. **Reporting & Exports**: Generate formal reports from grade records
+   - Report cards
+   - Transcripts
+   - Compliance exports (DepEd/CHED placeholders)
+   - Multiple format support per school
+
+### What Phase 4 Explicitly Avoids
+
+- **NO modification** to Phase 2 tables (OBS/AMS)
+- **NO modification** to Phase 3 tables (Reflection/Feedback)
+- **NO automatic computation** of grades from observations
+- **NO auto-averaging** of indicators or competency levels
+- **NO automatic ranking** of learners
+- **NO direct writes** back into learning data
+- **NO policy-driven computation** without explicit human confirmation
+- **NO numeric grade computation** (percent/GPA) in this phase
+
+### How Phase 4 Consumes Phase 2 & 3 Data (Read-Only)
+
+**From Phase 2 (OBS/AMS):**
+- Reads `observations` table to inform grade decisions (read-only reference)
+- Reads `competency_levels` to understand qualitative judgments
+- Reads `experiences` for context
+- **Never modifies** any Phase 2 table
+
+**From Phase 3 (Reflection/Feedback):**
+- Reads `teacher_reflections` for context (optional)
+- Reads `student_feedback` for context (optional)
+- **Never modifies** any Phase 3 table
+
+**Translation Flow:**
+```
+Phase 2/3 Learning Data (read-only) → Human Judgment → Grade Policy → Grade Record (confirmed) → Report
+```
+
+---
+
+## B. Phase 4 Entity Schema Proposals (NEW TABLES ONLY)
+
+Phase 4 introduces 8 new tables that form the grade translation and reporting layer. All tables are scoped by `organization_id` and optionally `school_id`, follow standard audit patterns, and never modify Phase 2 or Phase 3 tables.
+
+### 1. `grade_policies`
+
+Defines how an organization/school translates learning evidence into grades. Policies are scoped to organization/school and optionally to programs.
+
+**Fields:**
+- `id UUID PRIMARY KEY DEFAULT gen_random_uuid()`
+- `organization_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE`
+- `school_id UUID REFERENCES schools(id) ON DELETE SET NULL`
+- `program_id UUID REFERENCES programs(id) ON DELETE SET NULL` (optional: program-specific policy)
+- `policy_name TEXT NOT NULL` (e.g., "Standard A-F Grading", "Pass/Fail Scheme")
+- `policy_type TEXT NOT NULL CHECK (policy_type IN ('letter_grade', 'descriptor', 'pass_fail'))`
+- `description TEXT`
+- `is_active BOOLEAN DEFAULT TRUE`
+- `effective_start_date DATE`
+- `effective_end_date DATE`
+- `created_at TIMESTAMPTZ DEFAULT NOW()`
+- `updated_at TIMESTAMPTZ DEFAULT NOW()`
+- `created_by UUID REFERENCES profiles(id)`
+- `updated_by UUID REFERENCES profiles(id)`
+- `archived_at TIMESTAMPTZ`
+
+**Constraints:**
+- Unique constraint: `(organization_id, policy_name)` where `archived_at IS NULL`
+- Policy type enum ensures only allowed translation methods (no numeric)
+
+**Invariants:**
+- Policies define translation rules only (no computation fields)
+- Policies do not auto-apply (require human selection)
+- No numeric policy types allowed
+
+---
+
+### 2. `grading_scales`
+
+Defines the actual grade values within a policy (e.g., A, B, C, D, F or "Exceeds Expectations", "Meets Expectations", etc.).
+
+**Fields:**
+- `id UUID PRIMARY KEY DEFAULT gen_random_uuid()`
+- `organization_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE`
+- `grade_policy_id UUID NOT NULL REFERENCES grade_policies(id) ON DELETE RESTRICT`
+- `grade_value TEXT NOT NULL` (e.g., "A", "B", "Pass", "Exceeds Expectations")
+- `grade_label TEXT` (optional: display label)
+- `description TEXT` (what this grade means)
+- `is_passing BOOLEAN` (for pass/fail policies)
+- `display_order INTEGER` (UI ordering only, no computation)
+- `created_at TIMESTAMPTZ DEFAULT NOW()`
+- `updated_at TIMESTAMPTZ DEFAULT NOW()`
+- `created_by UUID REFERENCES profiles(id)`
+- `updated_by UUID REFERENCES profiles(id)`
+- `archived_at TIMESTAMPTZ`
+
+**Constraints:**
+- Unique constraint: `(grade_policy_id, grade_value)` where `archived_at IS NULL`
+
+**Invariants:**
+- Scales define grade values only (no computation logic)
+- No numeric computation fields
+- Display order is for UI only (no computation)
+
+---
+
+### 3. `promotion_rules`
+
+Defines rules for promotion/retention (optional, policy-driven). These are reference rules, not automatic enforcement.
+
+**Fields:**
+- `id UUID PRIMARY KEY DEFAULT gen_random_uuid()`
+- `organization_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE`
+- `school_id UUID REFERENCES schools(id) ON DELETE SET NULL`
+- `program_id UUID REFERENCES programs(id) ON DELETE SET NULL`
+- `rule_name TEXT NOT NULL`
+- `rule_description TEXT` (human-readable rule)
+- `requires_manual_review BOOLEAN DEFAULT TRUE` (always requires human confirmation)
+- `created_at TIMESTAMPTZ DEFAULT NOW()`
+- `updated_at TIMESTAMPTZ DEFAULT NOW()`
+- `created_by UUID REFERENCES profiles(id)`
+- `updated_by UUID REFERENCES profiles(id)`
+- `archived_at TIMESTAMPTZ`
+
+**Constraints:**
+- Unique constraint: `(organization_id, rule_name)` where `archived_at IS NULL`
+
+**Invariants:**
+- Rules are informational/reference only
+- No automatic enforcement (requires manual review)
+- Rules do not compute promotion status
+
+---
+
+### 4. `student_grades`
+
+Core grade record for a learner in a time period. Represents the translation of learning evidence into a formal grade. Requires human confirmation.
+
+**Fields:**
+- `id UUID PRIMARY KEY DEFAULT gen_random_uuid()`
+- `organization_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE`
+- `school_id UUID REFERENCES schools(id) ON DELETE SET NULL`
+- `student_id UUID NOT NULL REFERENCES students(id) ON DELETE RESTRICT`
+- `program_id UUID REFERENCES programs(id) ON DELETE SET NULL`
+- `section_id UUID REFERENCES sections(id) ON DELETE SET NULL`
+- `school_year_id UUID NOT NULL REFERENCES school_years(id) ON DELETE RESTRICT`
+- `term_period TEXT` (e.g., "Q1", "Q2", "Semester 1", "Full Year")
+- `grade_policy_id UUID NOT NULL REFERENCES grade_policies(id) ON DELETE RESTRICT`
+- `grading_scale_id UUID NOT NULL REFERENCES grading_scales(id) ON DELETE RESTRICT` (the actual grade value)
+- `status TEXT NOT NULL CHECK (status IN ('draft', 'pending_confirmation', 'confirmed', 'overridden')) DEFAULT 'draft'`
+- `confirmed_at TIMESTAMPTZ` (when grade was confirmed)
+- `confirmed_by UUID REFERENCES profiles(id)` (who confirmed the grade)
+- `override_reason TEXT` (required if status='overridden')
+- `override_by UUID REFERENCES profiles(id)` (who overrode the grade)
+- `override_at TIMESTAMPTZ` (when override occurred)
+- `notes TEXT` (human notes about this grade)
+- `created_at TIMESTAMPTZ DEFAULT NOW()`
+- `updated_at TIMESTAMPTZ DEFAULT NOW()`
+- `created_by UUID REFERENCES profiles(id)` (who created/translated the grade)
+- `updated_by UUID REFERENCES profiles(id)`
+- `archived_at TIMESTAMPTZ`
+
+**Constraints:**
+- Unique constraint: `(student_id, school_year_id, term_period, grade_policy_id)` where `status IN ('confirmed', 'overridden')` and `archived_at IS NULL`
+- `override_reason` required if `status='overridden'` (enforced via application logic)
+- `confirmed_by` and `confirmed_at` required if `status IN ('confirmed', 'overridden')` (enforced via application logic)
+- No numeric computation fields
+
+**Invariants:**
+- Grades are translations, not computed
+- All confirmed grades require human confirmation
+- Overrides require explicit justification
+- Grades reference time periods, not compute from them
+- No numeric computation fields
+
+---
+
+### 5. `grade_entries`
+
+Optional detailed breakdown of how a grade was determined. Links to specific learning evidence (observations) that informed the grade. Read-only references to Phase 2 data.
+
+**Fields:**
+- `id UUID PRIMARY KEY DEFAULT gen_random_uuid()`
+- `organization_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE`
+- `student_grade_id UUID NOT NULL REFERENCES student_grades(id) ON DELETE CASCADE`
+- `observation_id UUID REFERENCES observations(id) ON DELETE SET NULL` (read-only reference to Phase 2)
+- `competency_id UUID REFERENCES competencies(id) ON DELETE SET NULL` (read-only reference to Phase 2)
+- `domain_id UUID REFERENCES domains(id) ON DELETE SET NULL` (read-only reference to Phase 2)
+- `entry_type TEXT NOT NULL CHECK (entry_type IN ('observation_reference', 'competency_summary', 'domain_summary', 'manual_note'))`
+- `entry_text TEXT` (human notes about this entry)
+- `created_at TIMESTAMPTZ DEFAULT NOW()`
+- `updated_at TIMESTAMPTZ DEFAULT NOW()`
+- `created_by UUID REFERENCES profiles(id)`
+- `updated_by UUID REFERENCES profiles(id)`
+- `archived_at TIMESTAMPTZ`
+
+**Constraints:**
+- All Phase 2 references use `ON DELETE SET NULL` (preserves grade entry if observation/competency deleted)
+- Entry type enum ensures only allowed reference types
+- No numeric computation fields
+
+**Invariants:**
+- Entries are informational only (no computation)
+- Phase 2 references are read-only (never modify Phase 2 tables)
+- Entries document the translation process, not compute it
+- No numeric computation fields
+
+---
+
+### 6. `grade_justifications`
+
+Audit trail for grade decisions. Records why a grade was assigned, changed, or overridden. Append-only records.
+
+**Fields:**
+- `id UUID PRIMARY KEY DEFAULT gen_random_uuid()`
+- `organization_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE`
+- `student_grade_id UUID NOT NULL REFERENCES student_grades(id) ON DELETE CASCADE`
+- `justification_type TEXT NOT NULL CHECK (justification_type IN ('initial_assignment', 'confirmation', 'override', 'correction', 'appeal'))`
+- `justification_text TEXT NOT NULL` (why this action was taken)
+- `previous_grade_id UUID REFERENCES grading_scales(id) ON DELETE SET NULL` (if changed)
+- `new_grade_id UUID REFERENCES grading_scales(id) ON DELETE SET NULL` (if changed)
+- `created_at TIMESTAMPTZ DEFAULT NOW()`
+- `created_by UUID REFERENCES profiles(id)` (who made this justification)
+
+**Constraints:**
+- `justification_text` is required (all grade actions must be justified)
+- Previous/new grade IDs recommended if justification_type is 'override' or 'correction' (enforced via application logic)
+- No numeric computation fields
+
+**Invariants:**
+- All grade actions create justification records
+- Justifications are append-only (never deleted or updated)
+- Full audit trail for reversibility
+- No numeric computation fields
+
+---
+
+### 7. `transcript_records`
+
+Formal transcript entries derived from confirmed grades. Read-only from grade records.
+
+**Fields:**
+- `id UUID PRIMARY KEY DEFAULT gen_random_uuid()`
+- `organization_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE`
+- `school_id UUID REFERENCES schools(id) ON DELETE SET NULL`
+- `student_id UUID NOT NULL REFERENCES students(id) ON DELETE RESTRICT`
+- `student_grade_id UUID NOT NULL REFERENCES student_grades(id) ON DELETE RESTRICT` (source grade)
+- `program_id UUID REFERENCES programs(id) ON DELETE SET NULL`
+- `school_year_id UUID NOT NULL REFERENCES school_years(id) ON DELETE RESTRICT`
+- `term_period TEXT NOT NULL`
+- `course_name TEXT` (optional: if program has courses)
+- `grade_value TEXT NOT NULL` (from grading_scale.grade_value)
+- `credits DECIMAL(4,2)` (optional: if applicable)
+- `transcript_status TEXT NOT NULL CHECK (transcript_status IN ('draft', 'finalized')) DEFAULT 'draft'`
+- `finalized_at TIMESTAMPTZ`
+- `finalized_by UUID REFERENCES profiles(id)`
+- `created_at TIMESTAMPTZ DEFAULT NOW()`
+- `updated_at TIMESTAMPTZ DEFAULT NOW()`
+- `created_by UUID REFERENCES profiles(id)`
+- `updated_by UUID REFERENCES profiles(id)`
+- `archived_at TIMESTAMPTZ`
+
+**Constraints:**
+- Unique constraint: `(student_id, school_year_id, term_period, course_name)` where `transcript_status='finalized'` and `archived_at IS NULL`
+- `finalized_by` and `finalized_at` required if `transcript_status='finalized'` (enforced via application logic)
+- No GPA computation fields
+
+**Invariants:**
+- Transcripts read from grade records only (never write back)
+- Finalization requires human confirmation
+- Transcripts are snapshots (can be regenerated from grades)
+- No GPA computation in Phase 4
+- Credits are informational only (no computation)
+
+---
+
+### 8. `report_templates`
+
+Defines report card and transcript formats per school/organization.
+
+**Fields:**
+- `id UUID PRIMARY KEY DEFAULT gen_random_uuid()`
+- `organization_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE`
+- `school_id UUID REFERENCES schools(id) ON DELETE SET NULL`
+- `template_name TEXT NOT NULL` (e.g., "Standard Report Card", "DepEd Format", "CHED Format")
+- `template_type TEXT NOT NULL CHECK (template_type IN ('report_card', 'transcript', 'compliance_export'))`
+- `template_config JSONB` (format configuration, fields, layout)
+- `is_active BOOLEAN DEFAULT TRUE`
+- `created_at TIMESTAMPTZ DEFAULT NOW()`
+- `updated_at TIMESTAMPTZ DEFAULT NOW()`
+- `created_by UUID REFERENCES profiles(id)`
+- `updated_by UUID REFERENCES profiles(id)`
+- `archived_at TIMESTAMPTZ`
+
+**Constraints:**
+- Unique constraint: `(organization_id, template_name)` where `archived_at IS NULL`
+- Template config is JSONB for flexibility
+- No numeric computation fields
+
+**Invariants:**
+- Templates define output format only (no computation)
+- Templates read from grade/transcript records only
+- Templates never write back to learning data
+
+---
+
+## C. Phase 4 Pages & UX
+
+Phase 4 provides Next.js pages under `/sis/phase4` route prefix for managing grades and generating reports. All pages operate as read-only consumers of Phase 2/3 learning data.
+
+### Page Routes
+
+1. **`/sis/phase4/policies`** - Grade Policy Management
+   - **Who Uses**: Principal, Admin
+   - **Purpose**: Create and manage grade policies that define how learning evidence translates to grades
+
+2. **`/sis/phase4/scales`** - Grading Scale Management
+   - **Who Uses**: Principal, Admin
+   - **Purpose**: Define grade values within a policy (e.g., A, B, C, D, F or descriptors)
+
+3. **`/sis/phase4/grade-entry`** - Manual Grade Entry
+   - **Who Uses**: Teacher, Mentor, Admin
+   - **Purpose**: Create and edit grade records manually. Teachers enter grades based on their judgment of learning evidence
+
+4. **`/sis/phase4/review`** - Grade Review & Finalization
+   - **Who Uses**: Principal, Admin
+   - **Purpose**: Review pending grades, confirm grades, override grades, and manage grade finalization
+
+5. **`/sis/phase4/reports`** - Report Generation
+   - **Who Uses**: Principal, Admin, Registrar
+   - **Purpose**: Generate report cards, transcripts, and compliance exports from confirmed grades
+
+### Student-Facing Pages
+
+6. **`/sis/phase4/my-grades`** - Student Grade View
+   - **Who Uses**: Student
+   - **Purpose**: View own finalized grades and transcripts (read-only access)
+
+---
+
+## D. Phase Boundary Guarantee
+
+Phase 4 operates as a **separate translation layer** that maintains strict boundaries with learning data:
+
+### Read-Only Consumption
+- **Phase 4 is read-only** with respect to Phase 2 and Phase 3 data
+- All references to Phase 2/3 tables use `ON DELETE SET NULL` to preserve Phase 4 data
+- No foreign keys from Phase 2/3 tables point to Phase 4 tables
+- No triggers on Phase 2/3 tables write to Phase 4 tables
+
+### No Learning Data Modification
+- **No learning data is modified** by Phase 4 operations
+- Observations, competencies, domains, reflections, and feedback remain untouched
+- Phase 4 pages display learning evidence as read-only context only
+- No ability to create, update, or delete Phase 2/3 records from Phase 4 pages
+
+### Grades Are Reversible Translations
+- **Grades are reversible translations**, not learning truth
+- All grades are editable with complete audit trail via `grade_justifications`
+- Confirmed grades can be changed back to draft status
+- All grade changes preserve historical state in audit trail
+- Grades represent human judgment translated for reporting, not computed from observations
+
+### No Numeric Computation
+- **No numeric computation** (percent/GPA) exists in Phase 4
+- Policy types limited to 'letter_grade', 'descriptor', 'pass_fail' (no numeric)
+- No averages, percentages, or GPA calculations
+- Credits in transcript_records are informational only (no GPA computation)
+- All grade values are qualitative (text-based)
+
+### Human Confirmation Required
+- All grade finalization requires explicit human action
+- No automation of grade confirmation or finalization
+- Overrides require mandatory justification text
+- All actions create audit trail records
+
+---
+
+## Summary of Changes Applied
+
+1. **Removed `'numeric'` from `grade_policies.policy_type`**: Policy type now only allows `'letter_grade'`, `'descriptor'`, and `'pass_fail'`.
+
+2. **Added explicit avoidance**: Added "**NO numeric grade computation** (percent/GPA) in this phase" to the "What Phase 4 Explicitly Avoids" section.
+
+3. **Removed numeric fields from `grading_scales`**: Removed `minimum_numeric_value` and `maximum_numeric_value` fields and related constraints.
+
+4. **Added GPA computation invariant**: Added "No GPA computation in Phase 4" to `transcript_records` invariants.
+
+5. **Updated entity schema section**: Added all 8 Phase 4 tables with complete descriptions matching SCHEMA_GRADE_TRANSLATION_PHASE_4.md.
+
+6. **Added Phase 4 Pages & UX section**: Listed all page routes from PHASE_4_PAGES_IMPLEMENTATION.md with user roles.
+
+7. **Added Phase Boundary Guarantee section**: Explicitly states Phase 4 boundaries and guarantees.
