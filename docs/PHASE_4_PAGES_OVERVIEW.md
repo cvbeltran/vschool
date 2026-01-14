@@ -87,7 +87,7 @@ All Phase 4 pages are under `/sis/phase4` route prefix:
 
 **File**: `src/app/sis/phase4/grade-entry/page.tsx`
 
-**Who Uses**: Teacher, Mentor, Admin
+**Who Uses**: Teacher, Admin
 
 **Purpose**: Create and edit grade records manually. Teachers enter grades based on their judgment of learning evidence.
 

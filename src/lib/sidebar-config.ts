@@ -29,6 +29,12 @@ import {
   ClipboardCheck,
   FileCheck,
   FileBarChart,
+  Download,
+  FileSpreadsheet,
+  Link2,
+  Package,
+  BarChart3,
+  FolderOpen,
 } from "lucide-react";
 import { LucideIcon } from "lucide-react";
 
@@ -265,6 +271,43 @@ export const sidebarConfig: SidebarSection[] = [
     ],
   },
   {
+    label: "Exports & External Interfaces",
+    collapsible: true,
+    defaultCollapsed: false,
+    items: [
+      {
+        label: "Generate Export",
+        href: "/sis/phase5/exports",
+        icon: Download,
+        allowedRoles: ["principal", "admin"], // registrar can access via direct link for compliance exports
+      },
+      {
+        label: "Export History",
+        href: "/sis/phase5/exports/history",
+        icon: FileText,
+        allowedRoles: ["principal", "admin"], // registrar normalized to admin, can view
+      },
+      {
+        label: "Batch Export",
+        href: "/sis/phase5/exports/batch",
+        icon: Package,
+        allowedRoles: ["principal", "admin"], // registrar normalized to admin, can use
+      },
+      {
+        label: "Templates",
+        href: "/sis/phase5/templates",
+        icon: FileSpreadsheet,
+        allowedRoles: ["principal", "admin"],
+      },
+      {
+        label: "External ID Mappings",
+        href: "/sis/phase5/external-mappings",
+        icon: Link2,
+        allowedRoles: ["principal", "admin"],
+      },
+    ],
+  },
+  {
     label: "Reports",
     collapsible: true,
     defaultCollapsed: false,
@@ -323,6 +366,49 @@ export const sidebarConfig: SidebarSection[] = [
         href: "/sis/settings/taxonomies",
         icon: FolderTree,
         allowedRoles: ["principal", "admin"],
+      },
+    ],
+  },
+  {
+    label: "Pedagogy Operations",
+    collapsible: true,
+    defaultCollapsed: false,
+    items: [
+      {
+        label: "Syllabus",
+        href: "/sis/phase6/syllabus",
+        icon: BookOpen,
+        allowedRoles: ["principal", "admin", "teacher"],
+      },
+      {
+        label: "Lesson Logs",
+        href: "/sis/phase6/lesson-logs",
+        icon: FileText,
+        allowedRoles: ["principal", "admin", "teacher"],
+      },
+      {
+        label: "Progress Monitoring",
+        href: "/sis/phase6/monitoring/progress",
+        icon: BarChart3,
+        allowedRoles: ["principal", "admin"], // registrar normalized to admin, can view
+      },
+      {
+        label: "Attendance Sessions",
+        href: "/sis/phase6/attendance/sessions",
+        icon: Calendar,
+        allowedRoles: ["principal", "admin", "teacher"],
+      },
+      {
+        label: "My Attendance",
+        href: "/sis/phase6/attendance/my",
+        icon: UserCheck,
+        allowedRoles: ["principal", "admin", "teacher"],
+      },
+      {
+        label: "My Portfolio",
+        href: "/sis/phase6/portfolio/my",
+        icon: FolderOpen,
+        allowedRoles: ["principal", "admin", "teacher"], // students need access but normalized role may be teacher
       },
     ],
   },

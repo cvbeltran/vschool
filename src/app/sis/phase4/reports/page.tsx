@@ -39,8 +39,12 @@ export default function ReportsPage() {
   const [showGenerator, setShowGenerator] = useState(false);
   const [filterSchoolYearId, setFilterSchoolYearId] = useState<string>("");
   const [filterTermPeriod, setFilterTermPeriod] = useState<string>("");
+  const [filterStudentId, setFilterStudentId] = useState<string>("");
   const [schoolYears, setSchoolYears] = useState<
     Array<{ id: string; year_label: string }>
+  >([]);
+  const [students, setStudents] = useState<
+    Array<{ id: string; first_name: string | null; last_name: string | null }>
   >([]);
 
   useEffect(() => {
@@ -76,17 +80,31 @@ export default function ReportsPage() {
       const { data: schoolYearsData } = await schoolYearsQuery;
       setSchoolYears(schoolYearsData || []);
 
-      // Fetch transcripts
+      // Fetch students
+      let studentsQuery = supabase
+        .from("students")
+        .select("id, first_name, last_name")
+        .order("last_name", { ascending: true });
+
+      if (!isSuperAdmin && organizationId) {
+        studentsQuery = studentsQuery.eq("organization_id", organizationId);
+      }
+
+      const { data: studentsData } = await studentsQuery;
+      setStudents(studentsData || []);
+
+      // Fetch transcripts (both draft and finalized for admins)
       try {
-        const data = await listTranscriptRecords(
+        const transcriptData = await listTranscriptRecords(
           isSuperAdmin ? null : organizationId || null,
           {
-            transcriptStatus: "finalized",
             schoolYearId: filterSchoolYearId || null,
             termPeriod: filterTermPeriod || null,
+            studentId: filterStudentId || null,
+            // Don't filter by status - show both draft and finalized
           }
         );
-        setTranscripts(data);
+        setTranscripts(transcriptData);
         setError(null);
       } catch (err: any) {
         console.error("Error fetching transcripts:", err);
@@ -103,6 +121,7 @@ export default function ReportsPage() {
     orgLoading,
     filterSchoolYearId,
     filterTermPeriod,
+    filterStudentId,
   ]);
 
   const canGenerate = role === "principal" || role === "admin";
@@ -161,7 +180,9 @@ export default function ReportsPage() {
       const updated = await listTranscriptRecords(
         isSuperAdmin ? null : organizationId || null,
         {
-          transcriptStatus: "finalized",
+          schoolYearId: filterSchoolYearId || null,
+          termPeriod: filterTermPeriod || null,
+          studentId: filterStudentId || null,
         }
       );
       setTranscripts(updated);
@@ -185,7 +206,9 @@ export default function ReportsPage() {
       const updated = await listTranscriptRecords(
         isSuperAdmin ? null : organizationId || null,
         {
-          transcriptStatus: "finalized",
+          schoolYearId: filterSchoolYearId || null,
+          termPeriod: filterTermPeriod || null,
+          studentId: filterStudentId || null,
         }
       );
       setTranscripts(updated);
@@ -224,7 +247,26 @@ export default function ReportsPage() {
         <CardHeader>
           <CardTitle>Filters</CardTitle>
         </CardHeader>
-        <CardContent className="grid grid-cols-2 gap-4">
+        <CardContent className="grid grid-cols-3 gap-4">
+          <div>
+            <Label htmlFor="student">Student</Label>
+            <Select
+              value={filterStudentId || "all"}
+              onValueChange={(value) => setFilterStudentId(value === "all" ? "" : value)}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="All students" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All students</SelectItem>
+                {students.map((student) => (
+                  <SelectItem key={student.id} value={student.id}>
+                    {student.first_name} {student.last_name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
           <div>
             <Label htmlFor="school_year">School Year</Label>
             <Select
@@ -271,7 +313,7 @@ export default function ReportsPage() {
       {transcripts.length === 0 ? (
         <Card>
           <CardContent className="p-6 text-center text-gray-500">
-            No finalized transcripts found.
+            No transcripts found.
           </CardContent>
         </Card>
       ) : (
@@ -289,8 +331,20 @@ export default function ReportsPage() {
                       {transcript.school_year?.year_label} • {transcript.term_period}
                     </p>
                   </div>
-                  <div className="text-sm">
-                    Status: <strong>{transcript.transcript_status}</strong>
+                  <div className="flex items-center gap-4">
+                    <div className="text-sm">
+                      Status: <strong className={transcript.transcript_status === "finalized" ? "text-green-600" : "text-yellow-600"}>
+                        {transcript.transcript_status === "finalized" ? "Finalized" : "Draft"}
+                      </strong>
+                    </div>
+                    {transcript.transcript_status === "draft" && canGenerate && (
+                      <Button
+                        size="sm"
+                        onClick={() => handleFinalize(transcript.id)}
+                      >
+                        Finalize Transcript
+                      </Button>
+                    )}
                   </div>
                 </div>
               </CardHeader>
@@ -309,10 +363,21 @@ export default function ReportsPage() {
                       <strong>Credits:</strong> {transcript.credits}
                     </div>
                   )}
+                  {transcript.student_grade?.notes && (
+                    <div>
+                      <strong>Notes:</strong>
+                      <p className="text-sm text-gray-700 mt-1">{transcript.student_grade.notes}</p>
+                    </div>
+                  )}
                   {transcript.finalized_at && (
                     <div>
                       <strong>Finalized:</strong>{" "}
                       {new Date(transcript.finalized_at).toLocaleString()}
+                    </div>
+                  )}
+                  {transcript.transcript_status === "draft" && (
+                    <div className="text-sm text-yellow-600 italic mt-2">
+                      This transcript is in draft status. Finalize it to make it visible to students.
                     </div>
                   )}
                 </div>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -45,6 +45,8 @@ export function GradeEntryEditor({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showAddEntry, setShowAddEntry] = useState(false);
+  const [localNotes, setLocalNotes] = useState(grade.notes || "");
+  const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const handleGradeValueChange = async (scaleId: string) => {
     if (!currentProfileId) return;
@@ -66,19 +68,54 @@ export function GradeEntryEditor({
     }
   };
 
-  const handleNotesChange = async (notes: string) => {
-    if (!currentProfileId) return;
+  // Sync local notes with prop when grade changes externally
+  useEffect(() => {
+    setLocalNotes(grade.notes || "");
+  }, [grade.notes]);
 
-    try {
-      const updated = await updateStudentGradeHeader(grade.id, {
-        notes,
-        updated_by: currentProfileId,
-      });
-      onGradeUpdate(updated);
-    } catch (err: any) {
-      console.error("Error updating notes:", err);
+  const handleNotesChange = (notes: string) => {
+    // Update local state immediately for responsive UI
+    setLocalNotes(notes);
+
+    // Clear existing debounce timer
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current);
     }
+
+    // Debounce API call
+    debounceTimerRef.current = setTimeout(async () => {
+      if (!currentProfileId) return;
+
+      try {
+        const updated = await updateStudentGradeHeader(grade.id, {
+          notes,
+          updated_by: currentProfileId,
+        });
+        onGradeUpdate(updated);
+      } catch (err: any) {
+        console.error("Error updating notes:", {
+          error: err,
+          message: err?.message,
+          gradeId: grade.id,
+          currentProfileId,
+          notes,
+        });
+        // Revert to last known good value on error
+        setLocalNotes(grade.notes || "");
+        // Show user-friendly error
+        setError(err?.message || "Failed to save notes. You may not have permission to update this grade.");
+      }
+    }, 500); // 500ms debounce delay
   };
+
+  // Cleanup debounce timer on unmount
+  useEffect(() => {
+    return () => {
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current);
+      }
+    };
+  }, []);
 
   const handleAddEntry = async (entryData: {
     entry_type: "observation_reference" | "competency_summary" | "domain_summary" | "manual_note";
@@ -104,6 +141,28 @@ export function GradeEntryEditor({
     } catch (err: any) {
       console.error("Error adding grade entry:", err);
       setError(err.message || "Failed to add entry");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleSubmitForConfirmation = async () => {
+    if (!currentProfileId) return;
+
+    setIsSubmitting(true);
+    setError(null);
+
+    try {
+      const updated = await updateStudentGradeHeader(grade.id, {
+        status: "pending_confirmation",
+        updated_by: currentProfileId,
+      });
+      onGradeUpdate(updated);
+      // Show success message
+      setError(null);
+    } catch (err: any) {
+      console.error("Error submitting grade for confirmation:", err);
+      setError(err?.message || "Failed to submit grade for confirmation. You may not have permission.");
     } finally {
       setIsSubmitting(false);
     }
@@ -153,17 +212,36 @@ export function GradeEntryEditor({
             <Label htmlFor="notes">Notes</Label>
             <Textarea
               id="notes"
-              value={grade.notes || ""}
+              value={localNotes}
               onChange={(e) => handleNotesChange(e.target.value)}
               placeholder="Add notes explaining this grade translation"
               rows={3}
             />
           </div>
 
-          <div className="flex gap-2">
+          <div className="flex justify-between items-center gap-2">
             <span className="text-sm text-gray-600">
-              Status: <strong>{grade.status}</strong>
+              Status: <strong className="capitalize">{grade.status.replace("_", " ")}</strong>
             </span>
+            {grade.status === "draft" && (
+              <Button
+                onClick={handleSubmitForConfirmation}
+                disabled={isSubmitting}
+                className="ml-auto"
+              >
+                {isSubmitting ? "Submitting..." : "Submit for Confirmation"}
+              </Button>
+            )}
+            {grade.status === "pending_confirmation" && (
+              <span className="text-sm text-blue-600 italic">
+                Awaiting review by admin/principal
+              </span>
+            )}
+            {(grade.status === "confirmed" || grade.status === "overridden") && (
+              <span className="text-sm text-green-600 italic">
+                Grade finalized
+              </span>
+            )}
           </div>
         </CardContent>
       </Card>

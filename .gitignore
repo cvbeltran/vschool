@@ -10,6 +10,9 @@
 !.yarn/releases
 !.yarn/versions
 /migrations
+/docs
+/markdown_file
+*.md
 
 # testing
 /coverage

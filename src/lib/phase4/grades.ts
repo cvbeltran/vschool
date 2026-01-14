@@ -233,9 +233,17 @@ export async function updateStudentGradeHeader(
     updated_by?: string;
   }
 ): Promise<StudentGrade> {
-  const { data: result, error } = await supabase
+  const updatePayload = { ...data, updated_at: new Date().toISOString() };
+  
+  console.log("Updating student grade:", {
+    id,
+    updatePayload,
+    timestamp: new Date().toISOString(),
+  });
+
+  const response = await supabase
     .from("student_grades")
-    .update({ ...data, updated_at: new Date().toISOString() })
+    .update(updatePayload)
     .eq("id", id)
     .select(`
       *,
@@ -246,9 +254,62 @@ export async function updateStudentGradeHeader(
     `)
     .single();
 
+  const { data: result, error } = response;
+
+  // Log the full response structure
+  console.log("Supabase response:", {
+    hasData: !!result,
+    hasError: !!error,
+    errorType: typeof error,
+    errorConstructor: error?.constructor?.name,
+    responseKeys: Object.keys(response || {}),
+  });
+
   if (error) {
-    console.error("Error updating student grade:", error);
-    throw error;
+    // Try to extract error information in multiple ways
+    const errorInfo: any = {
+      error,
+      errorType: typeof error,
+      errorString: String(error),
+      errorJSON: JSON.stringify(error),
+    };
+
+    // Try to access common error properties
+    if (error && typeof error === 'object') {
+      errorInfo.errorMessage = (error as any).message;
+      errorInfo.errorDetails = (error as any).details;
+      errorInfo.errorHint = (error as any).hint;
+      errorInfo.errorCode = (error as any).code;
+      errorInfo.errorKeys = Object.keys(error);
+      
+      // Try to get all enumerable properties
+      for (const key in error) {
+        errorInfo[`error_${key}`] = (error as any)[key];
+      }
+    }
+
+    console.error("Error updating student grade - Full details:", {
+      ...errorInfo,
+      id,
+      data: updatePayload,
+    });
+
+    const errorMessage = 
+      (error as any)?.message || 
+      (error as any)?.details || 
+      String(error) || 
+      "Failed to update student grade";
+    
+    throw new Error(errorMessage);
+  }
+
+  if (!result) {
+    console.error("No data returned from update:", { 
+      id, 
+      data: updatePayload,
+      response,
+    });
+    throw new Error("Update succeeded but no data returned");
   }
 
   return result;
