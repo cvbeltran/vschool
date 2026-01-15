@@ -227,7 +227,7 @@ export default function GradeEntryPage() {
         setError(null); // Clear error on success
 
         // Fetch grade entries
-        const entries = await listGradeEntries(grade.id, organizationId);
+        const entries = await listGradeEntries(grade.id, organizationId || null);
         setGradeEntries(entries);
 
         // Fetch observations for context (read-only)
@@ -376,7 +376,7 @@ export default function GradeEntryPage() {
             setCurrentGrade(updatedGrade);
             const entries = await listGradeEntries(
               updatedGrade.id,
-              organizationId
+              organizationId || null
             );
             setGradeEntries(entries);
           }}
@@ -384,7 +384,7 @@ export default function GradeEntryPage() {
             if (currentGrade) {
               const entries = await listGradeEntries(
                 currentGrade.id,
-                organizationId
+                organizationId || null
               );
               setGradeEntries(entries);
             }
