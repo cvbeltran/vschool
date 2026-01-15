@@ -860,7 +860,7 @@ export default function AdmissionsPage() {
         dateOfBirth,
         enrollingAdmission.school_year_id,
         enrollingAdmission.program_id,
-        admissionOrgId
+        admissionOrgId || null
       );
 
       if (matchingAdmissions.length > 0) {
