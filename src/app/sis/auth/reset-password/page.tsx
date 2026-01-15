@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { useState, useEffect, Suspense } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -9,8 +9,9 @@ import { Card, CardContent } from "@/components/ui/card";
 import { supabase } from "@/lib/supabase/client";
 import { Loader2 } from "lucide-react";
 
-export default function ResetPasswordPage() {
+function ResetPasswordForm() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -20,6 +21,50 @@ export default function ResetPasswordPage() {
   useEffect(() => {
     const checkAuth = async () => {
       try {
+        // Check if code is verified (from API callback)
+        const code = searchParams.get('code');
+        const verified = searchParams.get('verified');
+        const email = searchParams.get('email');
+        
+        if (code && verified === 'true' && email) {
+          // Code was verified server-side - we can proceed without session
+          // The password update will use Admin API
+          console.log("Code verified server-side, proceeding without session");
+          setCheckingAuth(false);
+          return;
+        }
+        
+        // First, check for code parameter in query string (magic link flow)
+        if (code) {
+          // Try to exchange code on client side first (where cookies are available)
+          // If that fails, redirect to server-side handler
+          try {
+            console.log("Attempting client-side code exchange...");
+            const { data, error: exchangeError } = await supabase.auth.exchangeCodeForSession(code);
+            
+            if (!exchangeError && data?.session) {
+              console.log("Client-side code exchange succeeded");
+              // Clear code from URL
+              window.history.replaceState(null, '', window.location.pathname);
+              setCheckingAuth(false);
+              return;
+            }
+            
+            // If client-side exchange fails (likely due to missing flow state),
+            // redirect to server-side handler
+            if (exchangeError) {
+              console.log("Client-side exchange failed, redirecting to server handler:", exchangeError.message);
+              router.push(`/api/auth/callback?code=${encodeURIComponent(code)}&type=recovery`);
+              return;
+            }
+          } catch (err: any) {
+            console.error("Error in client-side code exchange:", err);
+            // Fallback to server-side handler
+            router.push(`/api/auth/callback?code=${encodeURIComponent(code)}&type=recovery`);
+            return;
+          }
+        }
+
         // Check if there's a hash fragment (PKCE flow from email link)
         if (typeof window !== 'undefined') {
           const hash = window.location.hash;
@@ -74,7 +119,7 @@ export default function ResetPasswordPage() {
     };
 
     checkAuth();
-  }, [router]);
+  }, [router, searchParams]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -95,7 +140,42 @@ export default function ResetPasswordPage() {
     setLoading(true);
 
     try {
-      // Update user password
+      // Check if we have a verified code/token (from server-side verification)
+      const code = searchParams.get('code');
+      const token = searchParams.get('token');
+      const verified = searchParams.get('verified');
+      const email = searchParams.get('email');
+      
+      if ((code || token) && verified === 'true' && email) {
+        // Use Admin API to update password (bypasses session requirement)
+        const response = await fetch('/api/auth/reset-password', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            code: code || undefined,
+            token: token || undefined,
+            email,
+            password,
+          }),
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+          setError(data.error || "Failed to reset password");
+          setLoading(false);
+          return;
+        }
+
+        // Password reset successfully - redirect to login with success message
+        router.push("/sis/auth/login?message=Password reset successfully. Please sign in with your new password.");
+        router.refresh();
+        return;
+      }
+
+      // Normal flow: Update user password (requires session)
       const { error: updateError } = await supabase.auth.updateUser({
         password: password,
       });
@@ -189,5 +269,20 @@ export default function ResetPasswordPage() {
         </Card>
       </div>
     </div>
+  );
+}
+
+export default function ResetPasswordPage() {
+  return (
+    <Suspense fallback={
+      <div className="flex min-h-screen items-center justify-center">
+        <div className="flex items-center gap-2">
+          <Loader2 className="size-4 animate-spin" />
+          <span className="text-muted-foreground">Loading...</span>
+        </div>
+      </div>
+    }>
+      <ResetPasswordForm />
+    </Suspense>
   );
 }

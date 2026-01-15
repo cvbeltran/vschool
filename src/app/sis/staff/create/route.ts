@@ -34,13 +34,20 @@ export async function POST(request: NextRequest) {
     } else {
       // Use inviteUserByEmail() which automatically sends an invitation email
       // When user clicks the link, they'll be logged in and redirected to set-password page
+      const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || 'http://localhost:3000';
+      const redirectTo = `${siteUrl}/api/auth/callback?type=invite&next=${encodeURIComponent('/sis/auth/set-password')}`;
+      
+      console.log('Inviting staff member and sending invitation email to:', email);
+      console.log('Invitation redirect URL:', redirectTo);
+      
       const { data: inviteData, error: inviteError } = await supabaseServer.auth.admin.inviteUserByEmail(
         email,
         {
-          redirectTo: `${process.env.NEXT_PUBLIC_SITE_URL || 'http://localhost:3000'}/sis/auth/login?type=invite`,
+          redirectTo: redirectTo,
           data: {
             first_name: first_name,
             last_name: last_name,
+            organization_id: creatorOrganizationId,
           },
         }
       );
@@ -85,6 +92,8 @@ export async function POST(request: NextRequest) {
 
         userId = inviteData.user.id;
         isNewAccount = true;
+        console.log('Staff invitation email sent successfully to:', email);
+        console.log('User ID:', userId);
       }
     }
 

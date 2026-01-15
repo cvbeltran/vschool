@@ -28,12 +28,24 @@ export default function ForgotPasswordPage() {
     }
 
     try {
-      const { error } = await supabase.auth.resetPasswordForEmail(email, {
-        redirectTo: `${process.env.NEXT_PUBLIC_SITE_URL || 'http://localhost:3000'}/sis/auth/reset-password`,
+      // Use our custom API route that handles password reset with Admin API
+      const response = await fetch('/api/auth/request-reset', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ email }),
       });
 
-      if (error) {
-        setError(error.message || "Failed to send password reset email");
+      const data = await response.json();
+
+      if (!response.ok) {
+        // Handle rate limit errors with a friendlier message
+        if (response.status === 429 || data.error?.includes('59 seconds') || data.error?.includes('rate limit')) {
+          setError("Please wait a moment before requesting another password reset. If you just requested one, check your email inbox (including spam folder).");
+        } else {
+          setError(data.error || "Failed to send password reset email");
+        }
         setLoading(false);
         return;
       }

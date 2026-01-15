@@ -93,11 +93,21 @@ export async function POST(request: NextRequest) {
       process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
     );
 
+    const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || 'http://localhost:3000';
+    const emailRedirectTo = `${siteUrl}/api/auth/callback?type=signup&next=${encodeURIComponent('/sis/auth/set-password')}`;
+    
+    console.log('Creating user account and sending confirmation email to:', email);
+    console.log('Email redirect URL:', emailRedirectTo);
+    
     const { data: userData, error: userError } = await supabaseClient.auth.signUp({
       email,
       password,
       options: {
-        emailRedirectTo: `${process.env.NEXT_PUBLIC_SITE_URL || 'http://localhost:3000'}/sis/auth/confirm`,
+        emailRedirectTo: emailRedirectTo,
+        data: {
+          organization_id: organization.id,
+          organization_name: organizationName,
+        },
       },
     });
 
@@ -122,7 +132,9 @@ export async function POST(request: NextRequest) {
     }
 
     // signUp() automatically sends confirmation email if SMTP is configured
-    // No need to manually generate links or trigger email sending
+    // The email will contain a confirmation link that redirects to emailRedirectTo
+    console.log('User account created successfully. Confirmation email sent to:', email);
+    console.log('User ID:', userData.user.id);
 
     // Create profile with organization_id and admin role
     const { error: profileError } = await supabaseServer
