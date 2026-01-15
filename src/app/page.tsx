@@ -1,6 +1,65 @@
+"use client";
+
+import { useEffect } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { Suspense } from "react";
 import Image from "next/image";
 
-export default function Home() {
+function HomeContent() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+
+  useEffect(() => {
+    // Check if there's a code parameter (Supabase auth callback)
+    const code = searchParams.get('code');
+    const type = searchParams.get('type');
+    
+    if (code) {
+      // Redirect based on type
+      if (type === 'recovery') {
+        // Password reset - redirect to reset password page with code
+        router.push(`/sis/auth/reset-password?code=${encodeURIComponent(code)}`);
+      } else if (type === 'invite' || type === 'signup') {
+        // Invite or signup - redirect to set password page
+        router.push(`/sis/auth/set-password?code=${encodeURIComponent(code)}`);
+      } else {
+        // Other types - use API callback handler
+        const next = searchParams.get('next');
+        let callbackUrl = `/api/auth/callback?code=${encodeURIComponent(code)}`;
+        if (type) {
+          callbackUrl += `&type=${encodeURIComponent(type)}`;
+        }
+        if (next) {
+          callbackUrl += `&next=${encodeURIComponent(next)}`;
+        }
+        router.push(callbackUrl);
+      }
+      return;
+    }
+
+    // Check for hash fragments (PKCE flow)
+    if (typeof window !== 'undefined') {
+      const hash = window.location.hash;
+      if (hash && hash.length > 1) {
+        // Has hash fragment - redirect to appropriate handler
+        const hashParams = new URLSearchParams(hash.substring(1));
+        const type = hashParams.get('type');
+        
+        if (type === 'recovery') {
+          router.push('/sis/auth/reset-password');
+        } else if (type === 'invite' || type === 'signup') {
+          router.push('/sis/auth/set-password');
+        } else {
+          router.push('/sis/auth/callback');
+        }
+        return;
+      }
+    }
+
+    // No auth parameters - redirect to login
+    router.push('/sis/auth/login');
+  }, [router, searchParams]);
+
   return (
     <div className="flex min-h-screen items-center justify-center bg-zinc-50 font-sans dark:bg-black">
       <main className="flex min-h-screen w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
@@ -61,5 +120,17 @@ export default function Home() {
         </div>
       </main>
     </div>
+  );
+}
+
+export default function Home() {
+  return (
+    <Suspense fallback={
+      <div className="flex min-h-screen items-center justify-center">
+        <div className="text-muted-foreground">Loading...</div>
+      </div>
+    }>
+      <HomeContent />
+    </Suspense>
   );
 }
