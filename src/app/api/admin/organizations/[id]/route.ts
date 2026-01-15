@@ -41,7 +41,7 @@ async function verifySuperAdmin(request: NextRequest) {
  */
 export async function GET(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     const { user, error } = await verifySuperAdmin(request);
@@ -50,7 +50,7 @@ export async function GET(
       return NextResponse.json({ error }, { status });
     }
 
-    const { id } = params;
+    const { id } = await params;
 
     // Fetch organization with statistics
     const { data: organization, error: orgError } = await supabaseServer
@@ -105,7 +105,7 @@ export async function GET(
  */
 export async function PUT(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     const { user, error } = await verifySuperAdmin(request);
@@ -114,7 +114,7 @@ export async function PUT(
       return NextResponse.json({ error }, { status });
     }
 
-    const { id } = params;
+    const { id } = await params;
     const body = await request.json();
 
     // Update organization
@@ -149,7 +149,7 @@ export async function PUT(
  */
 export async function DELETE(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     const { user, error } = await verifySuperAdmin(request);
@@ -158,7 +158,7 @@ export async function DELETE(
       return NextResponse.json({ error }, { status });
     }
 
-    const { id } = params;
+    const { id } = await params;
 
     // Delete organization (cascade will handle related records)
     const { error: deleteError } = await supabaseServer
