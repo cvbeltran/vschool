@@ -150,7 +150,14 @@ export async function GET(request: NextRequest) {
   });
 
   try {
-    console.log('Processing auth callback (non-recovery), code:', code?.substring(0, 10) + '...', 'type:', type);
+    // Ensure we have a code for non-recovery types
+    if (!code) {
+      const loginUrl = new URL('/sis/auth/login', request.url);
+      loginUrl.searchParams.set('error', 'Invalid authentication link');
+      return NextResponse.redirect(loginUrl);
+    }
+    
+    console.log('Processing auth callback (non-recovery), code:', code.substring(0, 10) + '...', 'type:', type);
     
     // Try to exchange the code - @supabase/ssr should handle PKCE flow state from cookies
     const { data, error } = await supabase.auth.exchangeCodeForSession(code);

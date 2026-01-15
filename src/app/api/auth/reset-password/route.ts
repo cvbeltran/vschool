@@ -91,15 +91,8 @@ export async function POST(request: NextRequest) {
     }
 
     // Use Admin API to update password
-    const adminClient = createClient(supabaseUrl, supabaseServiceRoleKey, {
-      auth: {
-        autoRefreshToken: false,
-        persistSession: false,
-      },
-    });
-
     const { error: updateError } = await adminClient.auth.admin.updateUserById(
-      verifyData.user.id,
+      user.id,
       { password }
     );
 
