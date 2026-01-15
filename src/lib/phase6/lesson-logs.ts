@@ -428,8 +428,8 @@ export async function upsertLessonLogLearnerVerification(
       .insert({
         organization_id: log.organization_id,
         lesson_log_id: logId,
-        learner_id: learnerId,
         ...payload,
+        learner_id: learnerId, // Override payload.learner_id if present
         created_by: session.user.id,
         updated_by: session.user.id,
       })

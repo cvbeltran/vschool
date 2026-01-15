@@ -187,7 +187,7 @@ export async function listMyPortfolioArtifacts(
   if (filters?.tag_type && filters?.tag_id) {
     const { data: tags } = await supabase
       .from("portfolio_artifact_tags")
-      .select("artifact_id")
+      .select("artifact_id, competency_id, domain_id, experience_id")
       .eq("tag_type", filters.tag_type)
       .is("archived_at", null);
 

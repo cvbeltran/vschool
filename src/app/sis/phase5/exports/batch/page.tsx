@@ -78,7 +78,6 @@ export default function BatchExportPage() {
 
       const canGenerate =
         role === "principal" ||
-        role === "admin" ||
         role === "admin"; // registrar normalized to admin
 
       if (!canGenerate) {

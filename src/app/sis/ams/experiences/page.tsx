@@ -94,7 +94,7 @@ export default function ExperiencesPage() {
       : experiences.filter((e) => e.experience_type === selectedType);
 
   const uniqueTypes = Array.from(
-    new Set(experiences.map((e) => e.experience_type).filter(Boolean))
+    new Set(experiences.map((e) => e.experience_type).filter((type): type is string => Boolean(type)))
   );
 
   const handleCreate = () => {

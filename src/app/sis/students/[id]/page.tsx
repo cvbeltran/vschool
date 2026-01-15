@@ -27,6 +27,7 @@ import { ToastContainer, type Toast } from "@/components/ui/toast";
 
 interface Student {
   id: string;
+  organization_id?: string | null;
   legal_first_name?: string | null;
   legal_last_name?: string | null;
   preferred_name?: string | null;

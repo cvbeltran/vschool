@@ -28,7 +28,13 @@ export interface ExportJob {
   created_at: string;
   updated_at: string;
   archived_at: string | null;
-  // Note: User info can be fetched separately from auth.users or staff table if needed
+  // Joined fields (optional, may not be present in all queries)
+  requested_by_profile?: {
+    id: string;
+    first_name: string | null;
+    last_name: string | null;
+    email: string;
+  } | null;
 }
 
 export interface ExportParameters {
@@ -121,7 +127,15 @@ export async function listExportJobs(
 export async function getExportJob(id: string): Promise<ExportJob | null> {
   const { data, error } = await supabase
     .from("export_jobs")
-    .select("*")
+    .select(`
+      *,
+      requested_by_profile:profiles!export_jobs_requested_by_fkey(
+        id,
+        first_name,
+        last_name,
+        email
+      )
+    `)
     .eq("id", id)
     .is("archived_at", null)
     .single();
