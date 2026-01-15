@@ -59,7 +59,7 @@ export function ExperienceCompetencyLinkEditor({
       setLoading(true);
       try {
         const [linksData, competenciesData] = await Promise.all([
-          getExperienceCompetencyLinks(experienceId),
+          getExperienceCompetencyLinks(experienceId, organizationId),
           getCompetencies(isSuperAdmin ? null : organizationId || null),
         ]);
 
@@ -100,7 +100,7 @@ export function ExperienceCompetencyLinkEditor({
       );
 
       // Refresh links
-      const updatedLinks = await getExperienceCompetencyLinks(experienceId);
+      const updatedLinks = await getExperienceCompetencyLinks(experienceId, organizationId);
       setLinks(updatedLinks);
 
       // Update available competencies
@@ -135,7 +135,7 @@ export function ExperienceCompetencyLinkEditor({
       await unlinkCompetencyFromExperience(experienceId, competencyId);
 
       // Refresh links
-      const updatedLinks = await getExperienceCompetencyLinks(experienceId);
+      const updatedLinks = await getExperienceCompetencyLinks(experienceId, organizationId);
       setLinks(updatedLinks);
 
       // Update available competencies
@@ -162,7 +162,7 @@ export function ExperienceCompetencyLinkEditor({
       await updateCompetencyLinkEmphasis(experienceId, competencyId, emphasis);
 
       // Refresh links
-      const updatedLinks = await getExperienceCompetencyLinks(experienceId);
+      const updatedLinks = await getExperienceCompetencyLinks(experienceId, organizationId);
       setLinks(updatedLinks);
       onUpdate?.();
     } catch (err: any) {

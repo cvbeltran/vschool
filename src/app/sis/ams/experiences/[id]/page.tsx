@@ -66,7 +66,7 @@ export default function ExperienceDetailPage() {
       try {
         const [exp, linksData, obsData] = await Promise.all([
           getExperience(experienceId),
-          getExperienceCompetencyLinks(experienceId),
+          getExperienceCompetencyLinks(experienceId, organizationId),
           getObservations(
             isSuperAdmin ? null : organizationId || null,
             { experienceId }
@@ -92,7 +92,7 @@ export default function ExperienceDetailPage() {
   const canCreateObservation = role === "principal" || role === "admin" || role === "teacher";
 
   const handleLinksUpdate = async () => {
-    const updatedLinks = await getExperienceCompetencyLinks(experienceId);
+    const updatedLinks = await getExperienceCompetencyLinks(experienceId, organizationId);
     setLinks(updatedLinks);
   };
 

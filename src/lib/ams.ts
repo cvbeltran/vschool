@@ -263,31 +263,71 @@ export async function archiveExperience(id: string): Promise<void> {
 // ============================================================================
 
 export async function getExperienceCompetencyLinks(
-  experienceId: string
+  experienceId: string,
+  organizationId?: string | null
 ): Promise<ExperienceCompetencyLink[]> {
-  const { data, error } = await supabase
+  // First, get the links
+  const { data: linksData, error: linksError } = await supabase
     .from("experience_competency_links")
-    .select(`
-      *,
-      competency:competencies(
-        id,
-        name,
-        domain:domains(
-          id,
-          name
-        )
-      )
-    `)
+    .select("*")
     .eq("experience_id", experienceId)
     .is("archived_at", null)
     .order("emphasis", { ascending: true });
 
-  if (error) {
-    console.error("Error fetching experience competency links:", error);
-    throw error;
+  if (linksError) {
+    console.error("Error fetching experience competency links:", linksError);
+    throw linksError;
   }
 
-  return data || [];
+  if (!linksData || linksData.length === 0) {
+    return [];
+  }
+
+  // Fetch competencies separately to ensure we get them even if join fails
+  const competencyIds = linksData.map((link: any) => link.competency_id);
+  
+  let competenciesQuery = supabase
+    .from("competencies")
+    .select(`
+      id,
+      name,
+      domain:domains(
+        id,
+        name
+      )
+    `)
+    .in("id", competencyIds)
+    .is("archived_at", null);
+
+  // Filter by organization if provided (for RLS)
+  if (organizationId) {
+    competenciesQuery = competenciesQuery.eq("organization_id", organizationId);
+  }
+
+  const { data: competenciesData, error: competenciesError } = await competenciesQuery;
+
+  if (competenciesError) {
+    console.error("Error fetching competencies:", competenciesError);
+    // Continue anyway - we'll just have links without competency data
+  }
+
+  // Create a map of competency_id -> competency
+  const competencyMap = new Map(
+    (competenciesData || []).map((comp: any) => [comp.id, comp])
+  );
+
+  // Combine links with their competencies
+  const linksWithCompetencies = linksData
+    .map((link: any) => {
+      const competency = competencyMap.get(link.competency_id);
+      return {
+        ...link,
+        competency: competency || null,
+      };
+    })
+    .filter((link: any) => link.competency != null); // Only include links with valid competencies
+
+  return linksWithCompetencies as ExperienceCompetencyLink[];
 }
 
 export async function linkCompetencyToExperience(
@@ -303,11 +343,14 @@ export async function linkCompetencyToExperience(
     throw new Error("Experience not found");
   }
 
+  // Use the experience's organization_id to ensure it matches RLS policy
+  // The RLS policy checks: organization_id = current_organization_id()
+  // So we must use the experience's organization_id, not the passed one
   const { data: result, error } = await supabase
     .from("experience_competency_links")
     .insert([
       {
-        organization_id: organizationId,
+        organization_id: experience.organization_id, // Use experience's org_id, not passed one
         experience_id: experienceId,
         competency_id: competencyId,
         emphasis,
@@ -329,15 +372,152 @@ export async function unlinkCompetencyFromExperience(
   experienceId: string,
   competencyId: string
 ): Promise<void> {
-  const { error } = await supabase
+  // First, get the experience to verify it exists and get organization context
+  const experience = await getExperience(experienceId);
+  if (!experience) {
+    throw new Error("Experience not found");
+  }
+
+  // Get current user for updated_by and to verify organization
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
+  if (!session) {
+    throw new Error("No active session");
+  }
+
+  // Verify user's profile has organization_id set
+  const { data: profile } = await supabase
+    .from("profiles")
+    .select("organization_id, role")
+    .eq("id", session.user.id)
+    .single();
+
+  if (!profile || !profile.organization_id) {
+    throw new Error("User profile missing organization_id. Please contact support.");
+  }
+
+  // Verify the link exists and has the correct organization_id
+  const { data: existingLink, error: fetchError } = await supabase
     .from("experience_competency_links")
-    .update({ archived_at: new Date().toISOString() })
+    .select("id, organization_id")
     .eq("experience_id", experienceId)
     .eq("competency_id", competencyId)
+    .is("archived_at", null)
+    .single();
+
+  if (fetchError || !existingLink) {
+    throw new Error("Competency link not found or already removed");
+  }
+
+  // Verify organization_id matches - critical for RLS
+  if (existingLink.organization_id !== experience.organization_id) {
+    // Link has wrong organization_id - try to fix it first (if RLS allows)
+    console.warn(
+      `Link organization_id (${existingLink.organization_id}) doesn't match experience organization_id (${experience.organization_id}). Attempting to fix...`
+    );
+    const { error: fixError } = await supabase
+      .from("experience_competency_links")
+      .update({ organization_id: experience.organization_id })
+      .eq("id", existingLink.id);
+    
+    if (fixError) {
+      console.error("Failed to fix link organization_id:", fixError);
+      // Continue anyway - the archive might still work if user's org matches experience's org
+    } else {
+      // Refresh the link data
+      existingLink.organization_id = experience.organization_id;
+    }
+  }
+
+  // Verify user's organization matches experience's organization
+  if (profile.organization_id !== experience.organization_id) {
+    throw new Error(
+      `Permission denied: Experience belongs to a different organization. ` +
+      `Your organization: ${profile.organization_id}, Experience organization: ${experience.organization_id}`
+    );
+  }
+
+  // Check if experience is archived (RLS might reject if archived)
+  if (experience.archived_at) {
+    throw new Error("Cannot unlink competency from archived experience");
+  }
+
+  // Verify school access if experience has school_id
+  if (experience.school_id) {
+    // Check if school exists and belongs to organization
+    const { data: school } = await supabase
+      .from("schools")
+      .select("id, organization_id")
+      .eq("id", experience.school_id)
+      .single();
+    
+    if (!school) {
+      throw new Error(`Experience references school ${experience.school_id} that doesn't exist`);
+    }
+    
+    if (school.organization_id !== profile.organization_id) {
+      throw new Error(
+        `Experience's school belongs to different organization. ` +
+        `School org: ${school.organization_id}, Your org: ${profile.organization_id}`
+      );
+    }
+  }
+
+  // Test if we can query the experience with the same conditions RLS uses
+  // This helps debug RLS policy issues
+  const { data: testExperience, error: testError } = await supabase
+    .from("experiences")
+    .select("id, organization_id, school_id, created_by, archived_at")
+    .eq("id", experienceId)
+    .single();
+
+  if (testError || !testExperience) {
+    throw new Error(
+      `Cannot access experience for RLS check. This might indicate a permission issue. ` +
+      `Error: ${testError?.message || "Experience not found"}`
+    );
+  }
+
+  // Debug info (remove in production)
+  console.log("RLS Debug:", {
+    experienceId: testExperience.id,
+    experienceOrg: testExperience.organization_id,
+    userOrg: profile.organization_id,
+    userRole: profile.role,
+    experienceSchoolId: testExperience.school_id,
+    experienceCreatedBy: testExperience.created_by,
+    experienceArchived: testExperience.archived_at,
+    linkOrg: existingLink.organization_id,
+    linkId: existingLink.id,
+  });
+
+  // Update the link - RLS will verify:
+  // 1. Link's organization_id matches current_organization_id()
+  // 2. User can UPDATE the parent experience (is_org_admin OR is_mentor who created it)
+  // 3. can_access_school() if experience has school_id
+  const { error } = await supabase
+    .from("experience_competency_links")
+    .update({ 
+      archived_at: new Date().toISOString(),
+      updated_by: session.user.id,
+    })
+    .eq("id", existingLink.id) // Use the link's ID for more precise update
     .is("archived_at", null);
 
   if (error) {
     console.error("Error unlinking competency from experience:", error);
+    // Provide more helpful error message
+    if (error.message.includes("row-level security") || error.code === "42501") {
+      throw new Error(
+        `Permission denied: RLS policy violation. ` +
+        `Link org: ${existingLink.organization_id}, ` +
+        `Experience org: ${experience.organization_id}, ` +
+        `Your org: ${profile.organization_id}, ` +
+        `Your role: ${profile.role}. ` +
+        `Error: ${error.message}`
+      );
+    }
     throw error;
   }
 }

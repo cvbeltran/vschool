@@ -83,8 +83,14 @@ export function RecordObservationModal({
         setLearners(learnersData || []);
 
         // Fetch competency links for this experience
-        const links = await getExperienceCompetencyLinks(experienceId);
+        const links = await getExperienceCompetencyLinks(experienceId, organizationId);
         setCompetencyLinks(links);
+        
+        // Log for debugging
+        console.log("Competency links fetched:", links);
+        if (links.length === 0) {
+          console.warn("No competency links found for experience:", experienceId);
+        }
 
         // Fetch competency levels
         const levels = await getCompetencyLevels(
@@ -211,22 +217,32 @@ export function RecordObservationModal({
               <Label htmlFor="competency_id">
                 Competency <span className="text-destructive">*</span>
               </Label>
-              <Select
-                value={selectedCompetencyId}
-                onValueChange={setSelectedCompetencyId}
-                disabled={isSubmitting || !!initialCompetencyId}
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Select a competency" />
-                </SelectTrigger>
-                <SelectContent>
-                  {competencyLinks.map((link) => (
-                    <SelectItem key={link.competency_id} value={link.competency_id}>
-                      {link.competency?.name || "Unknown"} ({link.emphasis})
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              {competencyLinks.length === 0 ? (
+                <div className="text-sm text-muted-foreground bg-muted border rounded-md p-3">
+                  <p className="font-medium mb-1">No competencies linked to this experience</p>
+                  <p className="text-xs">
+                    Please link competencies to this experience first before recording observations.
+                    You can do this from the Experience detail page.
+                  </p>
+                </div>
+              ) : (
+                <Select
+                  value={selectedCompetencyId}
+                  onValueChange={setSelectedCompetencyId}
+                  disabled={isSubmitting || !!initialCompetencyId}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select a competency" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {competencyLinks.map((link) => (
+                      <SelectItem key={link.competency_id} value={link.competency_id}>
+                        {link.competency?.name || "Unknown"} ({link.emphasis})
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
             </div>
 
             {selectedLearnerId && selectedCompetencyId && (
