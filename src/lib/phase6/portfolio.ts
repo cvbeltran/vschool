@@ -140,10 +140,10 @@ export async function listMyPortfolioArtifacts(
     throw new Error("No active session");
   }
 
-  // Get student_id from profile
+  // Get organization_id from profile and match student by email
   const { data: profile } = await supabase
     .from("profiles")
-    .select("id")
+    .select("id, organization_id")
     .eq("id", session.user.id)
     .single();
 
@@ -151,9 +151,24 @@ export async function listMyPortfolioArtifacts(
     throw new Error("Profile not found");
   }
 
-  // Check if user is a student (simplified - in real app, check role)
-  // For now, assume student_id matches profile.id
-  const studentId = profile.id;
+  // Match student by email (profiles table doesn't have student_id column)
+  let studentId: string | null = null;
+  const { data: user } = await supabase.auth.getUser();
+  if (user?.user?.email && profile.organization_id) {
+    const { data: student } = await supabase
+      .from("students")
+      .select("id")
+      .eq("primary_email", user.user.email)
+      .eq("organization_id", profile.organization_id)
+      .maybeSingle();
+    if (student) {
+      studentId = student.id;
+    }
+  }
+
+  if (!studentId) {
+    throw new Error("Student ID not found. Please ensure your account is linked to a student record.");
+  }
 
   let query = supabase
     .from("portfolio_artifacts")
@@ -225,10 +240,10 @@ export async function getMyPortfolioArtifact(
     throw new Error("No active session");
   }
 
-  // Get student_id from profile
+  // Get organization_id from profile and match student by email
   const { data: profile } = await supabase
     .from("profiles")
-    .select("id")
+    .select("id, organization_id")
     .eq("id", session.user.id)
     .single();
 
@@ -236,7 +251,24 @@ export async function getMyPortfolioArtifact(
     throw new Error("Profile not found");
   }
 
-  const studentId = profile.id;
+  // Match student by email (profiles table doesn't have student_id column)
+  let studentId: string | null = null;
+  const { data: user } = await supabase.auth.getUser();
+  if (user?.user?.email && profile.organization_id) {
+    const { data: student } = await supabase
+      .from("students")
+      .select("id")
+      .eq("primary_email", user.user.email)
+      .eq("organization_id", profile.organization_id)
+      .maybeSingle();
+    if (student) {
+      studentId = student.id;
+    }
+  }
+
+  if (!studentId) {
+    throw new Error("Student ID not found. Please ensure your account is linked to a student record.");
+  }
 
   const { data, error } = await supabase
     .from("portfolio_artifacts")
@@ -272,10 +304,10 @@ export async function createMyPortfolioArtifact(
     throw new Error("No active session");
   }
 
-  // Get student_id from profile
+  // Get organization_id from profile and match student by email
   const { data: profile } = await supabase
     .from("profiles")
-    .select("id")
+    .select("id, organization_id")
     .eq("id", session.user.id)
     .single();
 
@@ -283,7 +315,24 @@ export async function createMyPortfolioArtifact(
     throw new Error("Profile not found");
   }
 
-  const studentId = profile.id;
+  // Match student by email (profiles table doesn't have student_id column)
+  let studentId: string | null = null;
+  const { data: user } = await supabase.auth.getUser();
+  if (user?.user?.email && profile.organization_id) {
+    const { data: student } = await supabase
+      .from("students")
+      .select("id")
+      .eq("primary_email", user.user.email)
+      .eq("organization_id", profile.organization_id)
+      .maybeSingle();
+    if (student) {
+      studentId = student.id;
+    }
+  }
+
+  if (!studentId) {
+    throw new Error("Student ID not found. Please ensure your account is linked to a student record.");
+  }
 
   const { data: artifact, error } = await supabase
     .from("portfolio_artifacts")

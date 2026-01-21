@@ -9,6 +9,50 @@
 import { supabase } from "@/lib/supabase/client";
 
 // ============================================================================
+// Helper Functions
+// ============================================================================
+
+/**
+ * Fetch teacher names from staff table and enrich lesson logs
+ */
+async function enrichLessonLogsWithTeacherNames(
+  logs: any[]
+): Promise<LessonLog[]> {
+  if (!logs || logs.length === 0) return logs as LessonLog[];
+
+  // Collect unique teacher IDs
+  const teacherIds = [...new Set(logs.map((log) => log.teacher_id))].filter(
+    Boolean
+  );
+
+  if (teacherIds.length === 0) return logs as LessonLog[];
+
+  // Fetch staff records for these teacher IDs
+  const { data: staffData } = await supabase
+    .from("staff")
+    .select("user_id, first_name, last_name")
+    .in("user_id", teacherIds);
+
+  // Create a map of user_id -> staff info
+  const staffMap = new Map(
+    (staffData || []).map((staff) => [
+      staff.user_id,
+      { id: staff.user_id, first_name: staff.first_name, last_name: staff.last_name },
+    ])
+  );
+
+  // Enrich logs with teacher info
+  return logs.map((log) => ({
+    ...log,
+    teacher: staffMap.get(log.teacher_id) || {
+      id: log.teacher_id,
+      first_name: null,
+      last_name: null,
+    },
+  })) as LessonLog[];
+}
+
+// ============================================================================
 // Types
 // ============================================================================
 
@@ -133,7 +177,7 @@ export async function listLessonLogs(
     .from("weekly_lesson_logs")
     .select(`
       *,
-      teacher:profiles!weekly_lesson_logs_teacher_id_fkey(id, first_name, last_name),
+      teacher_profile:profiles!weekly_lesson_logs_teacher_id_fkey(id),
       syllabus:syllabi(id, name)
     `)
     .is("archived_at", null)
@@ -173,7 +217,8 @@ export async function listLessonLogs(
     throw new Error(`Failed to list lesson logs: ${error.message}`);
   }
 
-  return (data || []) as LessonLog[];
+  const logs = (data || []) as any[];
+  return await enrichLessonLogsWithTeacherNames(logs);
 }
 
 /**
@@ -184,7 +229,7 @@ export async function getLessonLog(id: string): Promise<LessonLog | null> {
     .from("weekly_lesson_logs")
     .select(`
       *,
-      teacher:profiles!weekly_lesson_logs_teacher_id_fkey(id, first_name, last_name),
+      teacher_profile:profiles!weekly_lesson_logs_teacher_id_fkey(id),
       syllabus:syllabi(id, name)
     `)
     .eq("id", id)
@@ -198,7 +243,8 @@ export async function getLessonLog(id: string): Promise<LessonLog | null> {
     throw new Error(`Failed to get lesson log: ${error.message}`);
   }
 
-  return data as LessonLog;
+  const enriched = await enrichLessonLogsWithTeacherNames([data]);
+  return enriched[0] || null;
 }
 
 /**
@@ -225,7 +271,7 @@ export async function createLessonLog(
     })
     .select(`
       *,
-      teacher:profiles!weekly_lesson_logs_teacher_id_fkey(id, first_name, last_name),
+      teacher_profile:profiles!weekly_lesson_logs_teacher_id_fkey(id),
       syllabus:syllabi(id, name)
     `)
     .single();
@@ -257,7 +303,8 @@ export async function createLessonLog(
     }
   }
 
-  return log as LessonLog;
+  const enriched = await enrichLessonLogsWithTeacherNames([log]);
+  return enriched[0];
 }
 
 /**
@@ -284,7 +331,7 @@ export async function updateLessonLog(
     .is("archived_at", null)
     .select(`
       *,
-      teacher:profiles!weekly_lesson_logs_teacher_id_fkey(id, first_name, last_name),
+      teacher_profile:profiles!weekly_lesson_logs_teacher_id_fkey(id),
       syllabus:syllabi(id, name)
     `)
     .single();
@@ -293,7 +340,8 @@ export async function updateLessonLog(
     throw new Error(`Failed to update lesson log: ${error.message}`);
   }
 
-  return log as LessonLog;
+  const enriched = await enrichLessonLogsWithTeacherNames([log]);
+  return enriched[0];
 }
 
 /**
@@ -342,6 +390,101 @@ export async function listLessonLogItems(
   }
 
   return (data || []) as LessonLogItem[];
+}
+
+/**
+ * Upsert lesson log item (create or update)
+ */
+export async function upsertLessonLogItem(
+  lessonLogId: string,
+  itemPayload: {
+    id?: string;
+    objective: string;
+    activity: string;
+    verification_method?: string | null;
+    display_order?: number;
+  }
+): Promise<LessonLogItem> {
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
+  if (!session) {
+    throw new Error("No active session");
+  }
+
+  // Get organization_id from lesson log
+  const log = await getLessonLog(lessonLogId);
+  if (!log) {
+    throw new Error("Lesson log not found");
+  }
+
+  if (itemPayload.id) {
+    // Update existing item
+    const { data: item, error } = await supabase
+      .from("weekly_lesson_log_items")
+      .update({
+        objective: itemPayload.objective,
+        activity: itemPayload.activity,
+        verification_method: itemPayload.verification_method || null,
+        display_order: itemPayload.display_order || null,
+        updated_by: session.user.id,
+      })
+      .eq("id", itemPayload.id)
+      .select("*")
+      .single();
+
+    if (error) {
+      throw new Error(`Failed to update lesson log item: ${error.message}`);
+    }
+
+    return item as LessonLogItem;
+  } else {
+    // Create new item
+    const { data: item, error } = await supabase
+      .from("weekly_lesson_log_items")
+      .insert({
+        organization_id: log.organization_id,
+        lesson_log_id: lessonLogId,
+        objective: itemPayload.objective,
+        activity: itemPayload.activity,
+        verification_method: itemPayload.verification_method || null,
+        display_order: itemPayload.display_order || null,
+        created_by: session.user.id,
+        updated_by: session.user.id,
+      })
+      .select("*")
+      .single();
+
+    if (error) {
+      throw new Error(`Failed to create lesson log item: ${error.message}`);
+    }
+
+    return item as LessonLogItem;
+  }
+}
+
+/**
+ * Delete lesson log item (soft delete via archive)
+ */
+export async function deleteLessonLogItem(itemId: string): Promise<void> {
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
+  if (!session) {
+    throw new Error("No active session");
+  }
+
+  const { error } = await supabase
+    .from("weekly_lesson_log_items")
+    .update({
+      archived_at: new Date().toISOString(),
+      updated_by: session.user.id,
+    })
+    .eq("id", itemId);
+
+  if (error) {
+    throw new Error(`Failed to archive lesson log item: ${error.message}`);
+  }
 }
 
 // ============================================================================
@@ -444,5 +587,29 @@ export async function upsertLessonLogLearnerVerification(
     }
 
     return verification as LearnerVerification;
+  }
+}
+
+/**
+ * Archive learner verification (soft delete)
+ */
+export async function archiveLearnerVerification(id: string): Promise<void> {
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
+  if (!session) {
+    throw new Error("No active session");
+  }
+
+  const { error } = await supabase
+    .from("weekly_lesson_log_learner_verifications")
+    .update({
+      archived_at: new Date().toISOString(),
+      updated_by: session.user.id,
+    })
+    .eq("id", id);
+
+  if (error) {
+    throw new Error(`Failed to archive learner verification: ${error.message}`);
   }
 }
