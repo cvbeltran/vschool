@@ -4,19 +4,59 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { Plus } from "lucide-react";
+import { useOrganization } from "@/lib/hooks/use-organization";
+import { supabase } from "@/lib/supabase/client";
 import { listLessonLogs, type LessonLog } from "@/lib/phase6/lesson-logs";
+import { normalizeRole } from "@/lib/rbac";
 
 export default function LessonLogsPage() {
   const router = useRouter();
+  const { organizationId, isSuperAdmin, isLoading: orgLoading } = useOrganization();
   const [logs, setLogs] = useState<LessonLog[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [role, setRole] = useState<"principal" | "admin" | "teacher">("teacher");
+  const [originalRole, setOriginalRole] = useState<string | null>(null);
+  const [currentTeacherId, setCurrentTeacherId] = useState<string | null>(null);
+  const [canCreate, setCanCreate] = useState(false);
 
   useEffect(() => {
     const fetchData = async () => {
+      if (orgLoading) return;
+
       try {
-        const data = await listLessonLogs();
+        // Get user role and teacher ID
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+        if (session) {
+          setCurrentTeacherId(session.user.id);
+          const { data: profile } = await supabase
+            .from("profiles")
+            .select("role")
+            .eq("id", session.user.id)
+            .single();
+          if (profile?.role) {
+            const normalizedRole = normalizeRole(profile.role);
+            setRole(normalizedRole);
+            setOriginalRole(profile.role);
+            // Teachers, admins, and principals can create lesson logs (registrar is view-only)
+            setCanCreate(
+              (normalizedRole === "teacher" || normalizedRole === "admin" || normalizedRole === "principal") &&
+              profile.role !== "registrar"
+            );
+          }
+        }
+
+        // Fetch lesson logs - teachers only see their own
+        const filters: any = {};
+        if (role === "teacher" && currentTeacherId) {
+          filters.teacher_id = currentTeacherId;
+        }
+
+        const data = await listLessonLogs(filters);
         setLogs(data);
         setError(null);
       } catch (err: any) {
@@ -28,7 +68,7 @@ export default function LessonLogsPage() {
     };
 
     fetchData();
-  }, []);
+  }, [orgLoading, role, currentTeacherId]);
 
   if (loading) {
     return (
@@ -43,10 +83,12 @@ export default function LessonLogsPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold">Lesson Logs</h1>
-        <Button onClick={() => router.push("/sis/phase6/lesson-logs/new")}>
-          <Plus className="mr-2 h-4 w-4" />
-          Create Lesson Log
-        </Button>
+        {canCreate && (
+          <Button onClick={() => router.push("/sis/phase6/lesson-logs/new")}>
+            <Plus className="mr-2 h-4 w-4" />
+            Create Lesson Log
+          </Button>
+        )}
       </div>
 
       {error && (
@@ -83,6 +125,11 @@ export default function LessonLogsPage() {
                         Teacher: {log.teacher.first_name} {log.teacher.last_name}
                       </p>
                     )}
+                    <div className="mt-2">
+                      <Badge variant={log.status === "submitted" ? "default" : "secondary"}>
+                        {log.status}
+                      </Badge>
+                    </div>
                   </div>
                   <Button
                     variant="outline"
