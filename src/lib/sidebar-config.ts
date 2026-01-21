@@ -35,6 +35,7 @@ import {
   Package,
   BarChart3,
   FolderOpen,
+  TrendingUp,
 } from "lucide-react";
 import { LucideIcon } from "lucide-react";
 
@@ -409,6 +410,50 @@ export const sidebarConfig: SidebarSection[] = [
         href: "/sis/phase6/portfolio/my",
         icon: FolderOpen,
         allowedRoles: ["principal", "admin", "teacher"], // students need access but normalized role may be teacher
+      },
+    ],
+  },
+  {
+    label: "Assessments",
+    collapsible: true,
+    defaultCollapsed: false,
+    items: [
+      {
+        label: "My Assessments",
+        href: "/sis/assessments",
+        icon: ClipboardCheck,
+        allowedRoles: ["principal", "admin", "teacher"],
+      },
+      {
+        label: "Create Assessment",
+        href: "/sis/assessments/new",
+        icon: FileCheck,
+        allowedRoles: ["principal", "admin", "teacher"],
+      },
+      {
+        label: "Label Sets",
+        href: "/sis/assessments/label-sets",
+        icon: ListChecks,
+        allowedRoles: ["principal", "admin"], // admin-only in UI
+      },
+    ],
+  },
+  {
+    label: "Insights",
+    collapsible: true,
+    defaultCollapsed: false,
+    items: [
+      {
+        label: "Teacher Insights",
+        href: "/sis/insights/teacher",
+        icon: Eye,
+        allowedRoles: ["principal", "admin", "teacher"],
+      },
+      {
+        label: "Admin Insights",
+        href: "/sis/insights/admin",
+        icon: TrendingUp,
+        allowedRoles: ["principal", "admin"],
       },
     ],
   },

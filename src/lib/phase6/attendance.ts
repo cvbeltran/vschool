@@ -9,6 +9,90 @@
 import { supabase } from "@/lib/supabase/client";
 
 // ============================================================================
+// Helper Functions
+// ============================================================================
+
+/**
+ * Fetch teacher names from staff table and enrich attendance sessions
+ */
+async function enrichAttendanceSessionsWithTeacherNames(
+  sessions: any[]
+): Promise<AttendanceSession[]> {
+  if (!sessions || sessions.length === 0) return sessions as AttendanceSession[];
+
+  // Collect unique teacher IDs
+  const teacherIds = [...new Set(sessions.map((s) => s.teacher_id))].filter(
+    Boolean
+  );
+
+  if (teacherIds.length === 0) return sessions as AttendanceSession[];
+
+  // Fetch staff records for these teacher IDs
+  const { data: staffData } = await supabase
+    .from("staff")
+    .select("user_id, first_name, last_name")
+    .in("user_id", teacherIds);
+
+  // Create a map of user_id -> staff info
+  const staffMap = new Map(
+    (staffData || []).map((staff) => [
+      staff.user_id,
+      { id: staff.user_id, first_name: staff.first_name, last_name: staff.last_name },
+    ])
+  );
+
+  // Enrich sessions with teacher info
+  return sessions.map((session) => ({
+    ...session,
+    teacher: staffMap.get(session.teacher_id) || {
+      id: session.teacher_id,
+      first_name: null,
+      last_name: null,
+    },
+  })) as AttendanceSession[];
+}
+
+/**
+ * Fetch teacher names from staff table and enrich teacher attendance records
+ */
+async function enrichTeacherAttendanceWithTeacherNames(
+  records: any[]
+): Promise<TeacherAttendance[]> {
+  if (!records || records.length === 0) return records as TeacherAttendance[];
+
+  // Collect unique teacher IDs
+  const teacherIds = [...new Set(records.map((r) => r.teacher_id))].filter(
+    Boolean
+  );
+
+  if (teacherIds.length === 0) return records as TeacherAttendance[];
+
+  // Fetch staff records for these teacher IDs
+  const { data: staffData } = await supabase
+    .from("staff")
+    .select("user_id, first_name, last_name")
+    .in("user_id", teacherIds);
+
+  // Create a map of user_id -> staff info
+  const staffMap = new Map(
+    (staffData || []).map((staff) => [
+      staff.user_id,
+      { id: staff.user_id, first_name: staff.first_name, last_name: staff.last_name },
+    ])
+  );
+
+  // Enrich records with teacher info
+  return records.map((record) => ({
+    ...record,
+    teacher: staffMap.get(record.teacher_id) || {
+      id: record.teacher_id,
+      first_name: null,
+      last_name: null,
+    },
+  })) as TeacherAttendance[];
+}
+
+// ============================================================================
 // Types
 // ============================================================================
 
@@ -154,7 +238,7 @@ export async function listAttendanceSessions(
     .from("attendance_sessions")
     .select(`
       *,
-      teacher:profiles!attendance_sessions_teacher_id_fkey(id, first_name, last_name),
+      teacher_profile:profiles!attendance_sessions_teacher_id_fkey(id),
       syllabus:syllabi(id, name)
     `)
     .is("archived_at", null)
@@ -211,7 +295,7 @@ export async function getAttendanceSession(
     .from("attendance_sessions")
     .select(`
       *,
-      teacher:profiles!attendance_sessions_teacher_id_fkey(id, first_name, last_name),
+      teacher_profile:profiles!attendance_sessions_teacher_id_fkey(id),
       syllabus:syllabi(id, name)
     `)
     .eq("id", id)
@@ -225,7 +309,8 @@ export async function getAttendanceSession(
     throw new Error(`Failed to get attendance session: ${error.message}`);
   }
 
-  return data as AttendanceSession;
+  const enriched = await enrichAttendanceSessionsWithTeacherNames([data]);
+  return enriched[0] || null;
 }
 
 /**
@@ -250,7 +335,7 @@ export async function createAttendanceSession(
     })
     .select(`
       *,
-      teacher:profiles!attendance_sessions_teacher_id_fkey(id, first_name, last_name),
+      teacher_profile:profiles!attendance_sessions_teacher_id_fkey(id),
       syllabus:syllabi(id, name)
     `)
     .single();
@@ -259,7 +344,8 @@ export async function createAttendanceSession(
     throw new Error(`Failed to create attendance session: ${error.message}`);
   }
 
-  return attendanceSession as AttendanceSession;
+  const enriched = await enrichAttendanceSessionsWithTeacherNames([attendanceSession]);
+  return enriched[0];
 }
 
 /**
@@ -286,7 +372,7 @@ export async function updateAttendanceSession(
     .is("archived_at", null)
     .select(`
       *,
-      teacher:profiles!attendance_sessions_teacher_id_fkey(id, first_name, last_name),
+      teacher_profile:profiles!attendance_sessions_teacher_id_fkey(id),
       syllabus:syllabi(id, name)
     `)
     .single();
@@ -295,7 +381,8 @@ export async function updateAttendanceSession(
     throw new Error(`Failed to update attendance session: ${error.message}`);
   }
 
-  return attendanceSession as AttendanceSession;
+  const enriched = await enrichAttendanceSessionsWithTeacherNames([attendanceSession]);
+  return enriched[0];
 }
 
 /**
@@ -429,6 +516,30 @@ export async function upsertAttendanceRecord(
   }
 }
 
+/**
+ * Archive attendance record (soft delete)
+ */
+export async function archiveAttendanceRecord(id: string): Promise<void> {
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
+  if (!session) {
+    throw new Error("No active session");
+  }
+
+  const { error } = await supabase
+    .from("attendance_records")
+    .update({
+      archived_at: new Date().toISOString(),
+      updated_by: session.user.id,
+    })
+    .eq("id", id);
+
+  if (error) {
+    throw new Error(`Failed to archive attendance record: ${error.message}`);
+  }
+}
+
 // ============================================================================
 // Teacher Self-Attendance
 // ============================================================================
@@ -450,7 +561,7 @@ export async function listMyTeacherAttendance(
     .from("teacher_attendance")
     .select(`
       *,
-      teacher:profiles!teacher_attendance_teacher_id_fkey(id, first_name, last_name)
+      teacher_profile:profiles!teacher_attendance_teacher_id_fkey(id)
     `)
     .eq("teacher_id", session.user.id)
     .is("archived_at", null)
@@ -478,7 +589,8 @@ export async function listMyTeacherAttendance(
     throw new Error(`Failed to list teacher attendance: ${error.message}`);
   }
 
-  return (data || []) as TeacherAttendance[];
+  const records = (data || []) as any[];
+  return await enrichTeacherAttendanceWithTeacherNames(records);
 }
 
 /**
@@ -504,7 +616,7 @@ export async function createMyTeacherAttendance(
     })
     .select(`
       *,
-      teacher:profiles!teacher_attendance_teacher_id_fkey(id, first_name, last_name)
+      teacher_profile:profiles!teacher_attendance_teacher_id_fkey(id)
     `)
     .single();
 
@@ -512,5 +624,74 @@ export async function createMyTeacherAttendance(
     throw new Error(`Failed to create teacher attendance: ${error.message}`);
   }
 
-  return teacherAttendance as TeacherAttendance;
+  const enriched = await enrichTeacherAttendanceWithTeacherNames([teacherAttendance]);
+  return enriched[0];
+}
+
+/**
+ * Update teacher self-attendance record
+ */
+export async function updateMyTeacherAttendance(
+  id: string,
+  payload: {
+    attendance_date?: string;
+    status?: "present" | "absent" | "late";
+    notes?: string | null;
+    session_id?: string | null;
+    experience_id?: string | null;
+  }
+): Promise<TeacherAttendance> {
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
+  if (!session) {
+    throw new Error("No active session");
+  }
+
+  const { data: teacherAttendance, error } = await supabase
+    .from("teacher_attendance")
+    .update({
+      ...payload,
+      updated_by: session.user.id,
+    })
+    .eq("id", id)
+    .eq("teacher_id", session.user.id) // Ensure user can only update their own attendance
+    .is("archived_at", null)
+    .select(`
+      *,
+      teacher_profile:profiles!teacher_attendance_teacher_id_fkey(id)
+    `)
+    .single();
+
+  if (error) {
+    throw new Error(`Failed to update teacher attendance: ${error.message}`);
+  }
+
+  const enriched = await enrichTeacherAttendanceWithTeacherNames([teacherAttendance]);
+  return enriched[0];
+}
+
+/**
+ * Archive teacher self-attendance record (soft delete)
+ */
+export async function archiveMyTeacherAttendance(id: string): Promise<void> {
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
+  if (!session) {
+    throw new Error("No active session");
+  }
+
+  const { error } = await supabase
+    .from("teacher_attendance")
+    .update({
+      archived_at: new Date().toISOString(),
+      updated_by: session.user.id,
+    })
+    .eq("id", id)
+    .eq("teacher_id", session.user.id); // Ensure user can only archive their own attendance
+
+  if (error) {
+    throw new Error(`Failed to archive teacher attendance: ${error.message}`);
+  }
 }
