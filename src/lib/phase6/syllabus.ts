@@ -399,6 +399,7 @@ export async function publishSyllabus(id: string): Promise<Syllabus> {
 
 /**
  * Archive a syllabus (soft delete)
+ * Uses a database function to bypass RLS and ensure proper permission checks
  */
 export async function archiveSyllabus(id: string): Promise<void> {
   const {
@@ -408,16 +409,18 @@ export async function archiveSyllabus(id: string): Promise<void> {
     throw new Error("No active session");
   }
 
-  const { error } = await supabase
-    .from("syllabi")
-    .update({
-      archived_at: new Date().toISOString(),
-      updated_by: session.user.id,
-    })
-    .eq("id", id);
+  // Use the database function to archive the syllabus (bypasses RLS)
+  const { data, error } = await supabase.rpc("archive_syllabus", {
+    syllabus_id_param: id,
+    user_id_param: session.user.id,
+  });
 
   if (error) {
     throw new Error(`Failed to archive syllabus: ${error.message}`);
+  }
+
+  if (!data) {
+    throw new Error("Failed to archive syllabus: Permission denied or syllabus not found");
   }
 }
 
