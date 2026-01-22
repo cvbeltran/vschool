@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { ArrowLeft, Save } from "lucide-react";
+import { useOrganization } from "@/lib/hooks/use-organization";
 import { getLabelSet, type AssessmentLabelSet } from "@/lib/assessment-labels";
 import { createLabel } from "@/lib/assessment-labels";
 
@@ -15,6 +16,7 @@ export default function CreateLabelPage() {
   const params = useParams();
   const router = useRouter();
   const labelSetId = params.id as string;
+  const { organizationId, isSuperAdmin, isLoading: orgLoading } = useOrganization();
 
   const [labelSet, setLabelSet] = useState<AssessmentLabelSet | null>(null);
   const [loading, setLoading] = useState(true);
@@ -58,13 +60,22 @@ export default function CreateLabelPage() {
       return;
     }
 
+    if (!organizationId && !isSuperAdmin) {
+      setError("Organization context required");
+      return;
+    }
+
     try {
       setSubmitting(true);
-      await createLabel(labelSetId, {
-        label_text: formData.label_text.trim(),
-        description: formData.description.trim() || null,
-        display_order: formData.display_order ? parseInt(formData.display_order) : null,
-      });
+      await createLabel(
+        labelSetId,
+        {
+          label_text: formData.label_text.trim(),
+          description: formData.description.trim() || null,
+          display_order: formData.display_order ? parseInt(formData.display_order) : null,
+        },
+        organizationId || null
+      );
 
       router.push(`/sis/assessments/label-sets/${labelSetId}`);
     } catch (err: any) {

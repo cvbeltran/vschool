@@ -201,32 +201,34 @@ export default function SyllabusPage() {
 
       {/* Archive Confirmation Dialog */}
       <Dialog open={showArchiveDialog} onOpenChange={setShowArchiveDialog}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Archive Syllabus</DialogTitle>
-            <DialogDescription>
-              Are you sure you want to archive this syllabus? Archived syllabi are soft-deleted and can be restored if needed.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => {
-                setShowArchiveDialog(false);
-                setArchiveTargetId(null);
-              }}
-              disabled={archivingId !== null}
-            >
-              Cancel
-            </Button>
-            <Button
-              variant="destructive"
-              onClick={handleArchive}
-              disabled={archivingId !== null}
-            >
-              {archivingId ? "Archiving..." : "Archive"}
-            </Button>
-          </DialogFooter>
+        <DialogContent className="p-0 border-0 shadow-none bg-transparent">
+          <div className="bg-background border rounded-lg p-6 space-y-4">
+            <DialogHeader>
+              <DialogTitle>Archive Syllabus</DialogTitle>
+              <DialogDescription>
+                Are you sure you want to archive this syllabus? Archived syllabi are soft-deleted and can be restored if needed.
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter>
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setShowArchiveDialog(false);
+                  setArchiveTargetId(null);
+                }}
+                disabled={archivingId !== null}
+              >
+                Cancel
+              </Button>
+              <Button
+                variant="destructive"
+                onClick={handleArchive}
+                disabled={archivingId !== null}
+              >
+                {archivingId ? "Archiving..." : "Archive"}
+              </Button>
+            </DialogFooter>
+          </div>
         </DialogContent>
       </Dialog>
     </div>

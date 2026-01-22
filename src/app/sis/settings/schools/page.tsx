@@ -24,6 +24,7 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { Plus, Pencil } from "lucide-react";
 import { normalizeRole, canPerform } from "@/lib/rbac";
+import { useOrganization } from "@/lib/hooks/use-organization";
 
 interface School {
   id: string;
@@ -35,6 +36,7 @@ interface School {
 }
 
 export default function SchoolsPage() {
+  const { organizationId, isSuperAdmin, isLoading: orgLoading } = useOrganization();
   const [schools, setSchools] = useState<School[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -57,6 +59,8 @@ export default function SchoolsPage() {
 
   useEffect(() => {
     const fetchData = async () => {
+      if (orgLoading) return; // Wait for organization context
+      
       // Fetch user role
       const {
         data: { session },
@@ -74,11 +78,16 @@ export default function SchoolsPage() {
         }
       }
 
-      // Fetch schools
-      const { data, error: fetchError } = await supabase
+      // Fetch schools - filter by organization_id unless super admin
+      let schoolsQuery = supabase
         .from("schools")
-        .select("id, code, name, type, location, is_active")
-        .order("name", { ascending: true });
+        .select("id, code, name, type, location, is_active");
+      
+      if (!isSuperAdmin && organizationId) {
+        schoolsQuery = schoolsQuery.eq("organization_id", organizationId);
+      }
+      
+      const { data, error: fetchError } = await schoolsQuery.order("name", { ascending: true });
 
       if (fetchError) {
         // Safely extract error information
@@ -115,7 +124,7 @@ export default function SchoolsPage() {
     };
 
     fetchData();
-  }, []);
+  }, [organizationId, isSuperAdmin, orgLoading]);
 
   const handleCreate = () => {
     setEditingSchool(null);
@@ -216,11 +225,16 @@ export default function SchoolsPage() {
       }
     }
 
-    // Refresh schools list
-    const { data: refreshData, error: refreshError } = await supabase
+    // Refresh schools list - filter by organization_id unless super admin
+    let refreshQuery = supabase
       .from("schools")
-      .select("id, code, name, type, location, is_active")
-      .order("name", { ascending: true });
+      .select("id, code, name, type, location, is_active");
+    
+    if (!isSuperAdmin && organizationId) {
+      refreshQuery = refreshQuery.eq("organization_id", organizationId);
+    }
+    
+    const { data: refreshData, error: refreshError } = await refreshQuery.order("name", { ascending: true });
 
     if (refreshError) {
       const errorDetails = {

@@ -180,23 +180,41 @@ export async function getLabelSet(id: string): Promise<AssessmentLabelSet | null
  * Create new label set (admin only)
  */
 export async function createLabelSet(
-  payload: CreateLabelSetPayload
+  payload: CreateLabelSetPayload,
+  organizationId?: string | null
 ): Promise<AssessmentLabelSet> {
-  const context = await getCurrentUserContext();
-  if (!context.organizationId) {
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
+  if (!session) {
+    throw new Error("No active session");
+  }
+
+  // Use provided organizationId or get from context
+  let orgId = organizationId;
+  if (!orgId) {
+    const context = await getCurrentUserContext();
+    orgId = context.organizationId;
+  }
+
+  if (!orgId) {
     throw new Error("Organization context required");
   }
+
+  // Get school_id from context if not provided
+  const context = await getCurrentUserContext();
+  const schoolId = payload.school_id || context.schoolId || null;
 
   const { data, error } = await supabase
     .from("assessment_label_sets")
     .insert({
-      organization_id: context.organizationId,
-      school_id: payload.school_id || context.schoolId || null,
+      organization_id: orgId,
+      school_id: schoolId,
       name: payload.name,
       description: payload.description || null,
       is_active: payload.is_active !== undefined ? payload.is_active : true,
-      created_by: context.userId,
-      updated_by: context.userId,
+      created_by: session.user.id,
+      updated_by: session.user.id,
     })
     .select()
     .single();
@@ -293,11 +311,14 @@ export async function listLabels(labelSetId: string): Promise<AssessmentLabel[]>
  */
 export async function createLabel(
   labelSetId: string,
-  payload: CreateLabelPayload
+  payload: CreateLabelPayload,
+  organizationId?: string | null
 ): Promise<AssessmentLabel> {
-  const context = await getCurrentUserContext();
-  if (!context.organizationId) {
-    throw new Error("Organization context required");
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
+  if (!session) {
+    throw new Error("No active session");
   }
 
   // Get label set to get organization_id
@@ -306,16 +327,22 @@ export async function createLabel(
     throw new Error("Label set not found");
   }
 
+  // Use provided organizationId or get from label set
+  const orgId = organizationId || labelSet.organization_id;
+  if (!orgId) {
+    throw new Error("Organization context required");
+  }
+
   const { data, error } = await supabase
     .from("assessment_labels")
     .insert({
-      organization_id: labelSet.organization_id,
+      organization_id: orgId,
       label_set_id: labelSetId,
       label_text: payload.label_text,
       description: payload.description || null,
       display_order: payload.display_order || null,
-      created_by: context.userId,
-      updated_by: context.userId,
+      created_by: session.user.id,
+      updated_by: session.user.id,
     })
     .select(`
       *,

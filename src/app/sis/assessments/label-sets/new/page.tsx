@@ -71,14 +71,22 @@ export default function CreateLabelSetPage() {
       return;
     }
 
+    if (!organizationId && !isSuperAdmin) {
+      setError("Organization context required");
+      return;
+    }
+
     try {
       setSubmitting(true);
-      const labelSet = await createLabelSet({
-        name: formData.name.trim(),
-        description: formData.description.trim() || null,
-        school_id: formData.school_id && formData.school_id !== "none" ? formData.school_id : null,
-        is_active: formData.is_active,
-      });
+      const labelSet = await createLabelSet(
+        {
+          name: formData.name.trim(),
+          description: formData.description.trim() || null,
+          school_id: formData.school_id && formData.school_id !== "none" ? formData.school_id : null,
+          is_active: formData.is_active,
+        },
+        organizationId || null
+      );
 
       router.push(`/sis/assessments/label-sets/${labelSet.id}`);
     } catch (err: any) {
