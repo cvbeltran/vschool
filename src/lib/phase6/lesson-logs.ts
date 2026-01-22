@@ -465,6 +465,7 @@ export async function upsertLessonLogItem(
 
 /**
  * Delete lesson log item (soft delete via archive)
+ * Uses a database function to bypass RLS and ensure proper permission checks
  */
 export async function deleteLessonLogItem(itemId: string): Promise<void> {
   const {
@@ -474,16 +475,18 @@ export async function deleteLessonLogItem(itemId: string): Promise<void> {
     throw new Error("No active session");
   }
 
-  const { error } = await supabase
-    .from("weekly_lesson_log_items")
-    .update({
-      archived_at: new Date().toISOString(),
-      updated_by: session.user.id,
-    })
-    .eq("id", itemId);
+  // Use the database function to archive the item (bypasses RLS)
+  const { data, error } = await supabase.rpc("archive_lesson_log_item", {
+    item_id_param: itemId,
+    user_id_param: session.user.id,
+  });
 
   if (error) {
     throw new Error(`Failed to archive lesson log item: ${error.message}`);
+  }
+
+  if (!data) {
+    throw new Error("Failed to archive lesson log item: Permission denied or item not found");
   }
 }
 

@@ -551,11 +551,16 @@ export default function AdmissionsPage() {
       return;
     }
 
-    // Refresh admissions list
-    const { data: refreshData, error: refreshError } = await supabase
+    // Refresh admissions list - filter by organization_id unless super admin
+    let refreshQuery = supabase
       .from("admissions")
-      .select("id, organization_id, school_id, program_id, section_id, school_year_id, first_name, last_name, email, status, created_at")
-      .order("created_at", { ascending: false });
+      .select("id, organization_id, school_id, program_id, section_id, school_year_id, first_name, last_name, email, status, created_at");
+    
+    if (!isSuperAdmin && organizationId) {
+      refreshQuery = refreshQuery.eq("organization_id", organizationId);
+    }
+    
+    const { data: refreshData, error: refreshError } = await refreshQuery.order("created_at", { ascending: false });
 
     if (refreshError) {
       const errorDetails = {
@@ -601,11 +606,16 @@ export default function AdmissionsPage() {
       return;
     }
 
-    // Refresh admissions list
-    const { data } = await supabase
+    // Refresh admissions list - filter by organization_id unless super admin
+    let refreshQuery = supabase
       .from("admissions")
-      .select("id, organization_id, school_id, program_id, section_id, school_year_id, first_name, last_name, email, status, created_at")
-      .order("created_at", { ascending: false });
+      .select("id, organization_id, school_id, program_id, section_id, school_year_id, first_name, last_name, email, status, created_at");
+    
+    if (!isSuperAdmin && organizationId) {
+      refreshQuery = refreshQuery.eq("organization_id", organizationId);
+    }
+    
+    const { data } = await refreshQuery.order("created_at", { ascending: false });
 
     if (data) {
       setAdmissions(data);
@@ -635,11 +645,16 @@ export default function AdmissionsPage() {
       return;
     }
 
-    // Refresh admissions list
-    const { data } = await supabase
+    // Refresh admissions list - filter by organization_id unless super admin
+    let refreshQuery = supabase
       .from("admissions")
-      .select("id, organization_id, school_id, program_id, section_id, school_year_id, first_name, last_name, email, status, created_at")
-      .order("created_at", { ascending: false });
+      .select("id, organization_id, school_id, program_id, section_id, school_year_id, first_name, last_name, email, status, created_at");
+    
+    if (!isSuperAdmin && organizationId) {
+      refreshQuery = refreshQuery.eq("organization_id", organizationId);
+    }
+    
+    const { data } = await refreshQuery.order("created_at", { ascending: false });
 
     if (data) {
       setAdmissions(data);
@@ -753,11 +768,18 @@ export default function AdmissionsPage() {
     const normalizedEmail = email?.trim().toLowerCase() || null;
 
     // Build query to check for duplicate students
-    // Fetch all students and filter in JavaScript for exact name matches
+    // Fetch students and filter in JavaScript for exact name matches
     // This approach is simpler and more reliable than complex Supabase queries
-    const { data: allStudents, error: duplicateCheckError } = await supabase
+    // Filter by organization_id unless super admin
+    let duplicateCheckQuery = supabase
       .from("students")
       .select("id, first_name, last_name, legal_first_name, legal_last_name, email, primary_email, date_of_birth, organization_id");
+    
+    if (!isSuperAdmin && organizationId) {
+      duplicateCheckQuery = duplicateCheckQuery.eq("organization_id", organizationId);
+    }
+    
+    const { data: allStudents, error: duplicateCheckError } = await duplicateCheckQuery;
 
     if (duplicateCheckError) {
       console.error("Error checking for duplicate students:", duplicateCheckError);
@@ -955,11 +977,16 @@ export default function AdmissionsPage() {
       return;
     }
 
-    // Refresh admissions list
-    const { data } = await supabase
+    // Refresh admissions list - filter by organization_id unless super admin
+    let refreshQuery = supabase
       .from("admissions")
-      .select("id, organization_id, school_id, program_id, section_id, school_year_id, first_name, last_name, email, status, created_at")
-      .order("created_at", { ascending: false });
+      .select("id, organization_id, school_id, program_id, section_id, school_year_id, first_name, last_name, email, status, created_at");
+    
+    if (!isSuperAdmin && organizationId) {
+      refreshQuery = refreshQuery.eq("organization_id", organizationId);
+    }
+    
+    const { data } = await refreshQuery.order("created_at", { ascending: false });
 
     if (data) {
       setAdmissions(data);

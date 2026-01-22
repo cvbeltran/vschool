@@ -17,7 +17,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
-import { ArrowLeft, Edit2, Archive, UserCheck } from "lucide-react";
+import { ArrowLeft, Edit2, Archive, UserCheck, Plus, Trash2 } from "lucide-react";
 import { useOrganization } from "@/lib/hooks/use-organization";
 import { supabase } from "@/lib/supabase/client";
 import {
@@ -25,6 +25,8 @@ import {
   listLessonLogItems,
   listLearnerVerifications,
   upsertLessonLogLearnerVerification,
+  upsertLessonLogItem,
+  deleteLessonLogItem,
   archiveLessonLog,
   type LessonLog,
   type LearnerVerification,
@@ -56,11 +58,20 @@ export default function LessonLogDetailPage() {
   const [archiving, setArchiving] = useState(false);
   const [showArchiveDialog, setShowArchiveDialog] = useState(false);
   const [showVerificationDialog, setShowVerificationDialog] = useState(false);
+  const [showItemDialog, setShowItemDialog] = useState(false);
+  const [editingItem, setEditingItem] = useState<any | null>(null);
   const [selectedLearnerId, setSelectedLearnerId] = useState<string | null>(null);
   const [verificationForm, setVerificationForm] = useState({
     accomplished_flag: false,
     evidence_text: "",
   });
+  const [itemForm, setItemForm] = useState({
+    objective: "",
+    activity: "",
+    verification_method: "",
+  });
+  const [savingItem, setSavingItem] = useState(false);
+  const [deletingItem, setDeletingItem] = useState<string | null>(null);
 
   useEffect(() => {
     const fetchData = async () => {
@@ -184,6 +195,61 @@ export default function LessonLogDetailPage() {
     }
   };
 
+  const handleSaveItem = async () => {
+    if (!itemForm.objective.trim() || !itemForm.activity.trim()) {
+      setError("Objective and Activity are required");
+      return;
+    }
+
+    setSavingItem(true);
+    setError(null);
+
+    try {
+      await upsertLessonLogItem(id, {
+        id: editingItem?.id,
+        objective: itemForm.objective.trim(),
+        activity: itemForm.activity.trim(),
+        verification_method: itemForm.verification_method.trim() || null,
+        display_order: editingItem?.display_order || items.length,
+      });
+
+      // Refresh items
+      const itemsData = await listLessonLogItems(id);
+      setItems(itemsData);
+
+      setShowItemDialog(false);
+      setEditingItem(null);
+      setItemForm({ objective: "", activity: "", verification_method: "" });
+    } catch (err: any) {
+      console.error("Error saving item:", err);
+      setError(err.message || "Failed to save item");
+    } finally {
+      setSavingItem(false);
+    }
+  };
+
+  const handleDeleteItem = async (itemId: string) => {
+    if (!confirm("Are you sure you want to delete this item?")) {
+      return;
+    }
+
+    setDeletingItem(itemId);
+    setError(null);
+
+    try {
+      await deleteLessonLogItem(itemId);
+
+      // Refresh items
+      const itemsData = await listLessonLogItems(id);
+      setItems(itemsData);
+    } catch (err: any) {
+      console.error("Error deleting item:", err);
+      setError(err.message || "Failed to delete item");
+    } finally {
+      setDeletingItem(null);
+    }
+  };
+
   if (loading) {
     return (
       <div className="space-y-6">
@@ -295,7 +361,22 @@ export default function LessonLogDetailPage() {
 
         <Card>
           <CardHeader>
-            <CardTitle>Lesson Items</CardTitle>
+            <div className="flex items-center justify-between">
+              <CardTitle>Lesson Items</CardTitle>
+              {canEdit && (
+                <Button
+                  size="sm"
+                  onClick={() => {
+                    setEditingItem(null);
+                    setItemForm({ objective: "", activity: "", verification_method: "" });
+                    setShowItemDialog(true);
+                  }}
+                >
+                  <Plus className="h-4 w-4 mr-2" />
+                  Add Item
+                </Button>
+              )}
+            </div>
           </CardHeader>
           <CardContent>
             {items.length === 0 ? (
@@ -304,18 +385,49 @@ export default function LessonLogDetailPage() {
               <div className="space-y-4">
                 {items.map((item, index) => (
                   <div key={item.id} className="border rounded p-3">
-                    <p className="font-medium text-sm">Item {index + 1}</p>
-                    <p className="text-sm mt-1">
-                      <strong>Objective:</strong> {item.objective}
-                    </p>
-                    <p className="text-sm mt-1">
-                      <strong>Activity:</strong> {item.activity}
-                    </p>
-                    {item.verification_method && (
-                      <p className="text-sm mt-1">
-                        <strong>Verification:</strong> {item.verification_method}
-                      </p>
-                    )}
+                    <div className="flex items-start justify-between">
+                      <div className="flex-1">
+                        <p className="font-medium text-sm">Item {index + 1}</p>
+                        <p className="text-sm mt-1">
+                          <strong>Objective:</strong> {item.objective}
+                        </p>
+                        <p className="text-sm mt-1">
+                          <strong>Activity:</strong> {item.activity}
+                        </p>
+                        {item.verification_method && (
+                          <p className="text-sm mt-1">
+                            <strong>Verification:</strong> {item.verification_method}
+                          </p>
+                        )}
+                      </div>
+                      {canEdit && (
+                        <div className="flex gap-2 ml-4">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => {
+                              setEditingItem(item);
+                              setItemForm({
+                                objective: item.objective,
+                                activity: item.activity,
+                                verification_method: item.verification_method || "",
+                              });
+                              setShowItemDialog(true);
+                            }}
+                          >
+                            <Edit2 className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => handleDeleteItem(item.id)}
+                            disabled={deletingItem === item.id}
+                          >
+                            <Trash2 className="h-4 w-4 text-destructive" />
+                          </Button>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 ))}
               </div>
@@ -443,6 +555,78 @@ export default function LessonLogDetailPage() {
               Cancel
             </Button>
             <Button onClick={handleSaveVerification}>Save</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Item Dialog */}
+      <Dialog open={showItemDialog} onOpenChange={setShowItemDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{editingItem ? "Edit Item" : "Add Item"}</DialogTitle>
+            <DialogDescription>
+              Add or edit a lesson item with objective, activity, and verification method.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <Label htmlFor="objective">
+                Objective <span className="text-destructive">*</span>
+              </Label>
+              <Textarea
+                id="objective"
+                value={itemForm.objective}
+                onChange={(e) =>
+                  setItemForm({ ...itemForm, objective: e.target.value })
+                }
+                placeholder="Enter the learning objective..."
+                rows={3}
+                required
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="activity">
+                Activity <span className="text-destructive">*</span>
+              </Label>
+              <Textarea
+                id="activity"
+                value={itemForm.activity}
+                onChange={(e) =>
+                  setItemForm({ ...itemForm, activity: e.target.value })
+                }
+                placeholder="Describe the activity..."
+                rows={3}
+                required
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="verification_method">Verification Method (Optional)</Label>
+              <Textarea
+                id="verification_method"
+                value={itemForm.verification_method}
+                onChange={(e) =>
+                  setItemForm({ ...itemForm, verification_method: e.target.value })
+                }
+                placeholder="How will you verify learning? (e.g., observation, quiz, project)..."
+                rows={2}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setShowItemDialog(false);
+                setEditingItem(null);
+                setItemForm({ objective: "", activity: "", verification_method: "" });
+              }}
+              disabled={savingItem}
+            >
+              Cancel
+            </Button>
+            <Button onClick={handleSaveItem} disabled={savingItem}>
+              {savingItem ? "Saving..." : editingItem ? "Update" : "Add"}
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

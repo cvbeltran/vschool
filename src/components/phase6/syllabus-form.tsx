@@ -126,18 +126,39 @@ export function SyllabusForm({
         setExperiences(experiencesData);
 
         // Fetch teachers
-        let teachersQuery = supabase
+        // First, get profiles with teacher/principal/admin roles
+        let profilesQuery = supabase
           .from("profiles")
-          .select("id, first_name, last_name, email")
-          .in("role", ["teacher", "principal", "admin"])
-          .order("first_name", { ascending: true });
+          .select("id")
+          .in("role", ["teacher", "principal", "admin"]);
 
         if (!isSuperAdmin && organizationId) {
-          teachersQuery = teachersQuery.eq("organization_id", organizationId);
+          profilesQuery = profilesQuery.eq("organization_id", organizationId);
         }
 
-        const { data: teachersData } = await teachersQuery;
-        setTeachers((teachersData || []) as Teacher[]);
+        const { data: profilesData } = await profilesQuery;
+        const profileIds = (profilesData || []).map((p) => p.id);
+
+        // Then, fetch staff records for these profiles to get names and emails
+        if (profileIds.length > 0) {
+          const { data: staffData } = await supabase
+            .from("staff")
+            .select("user_id, first_name, last_name, email_address")
+            .in("user_id", profileIds)
+            .order("first_name", { ascending: true });
+
+          // Map staff data to Teacher format
+          const teachersData = (staffData || []).map((staff) => ({
+            id: staff.user_id,
+            first_name: staff.first_name,
+            last_name: staff.last_name,
+            email: staff.email_address,
+          }));
+
+          setTeachers(teachersData);
+        } else {
+          setTeachers([]);
+        }
 
         // Load existing syllabus data if editing
         if (syllabus) {
