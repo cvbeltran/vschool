@@ -62,6 +62,32 @@ export default function EditSyllabusPage() {
     );
   }
 
+  // Prevent editing published syllabi - redirect to detail page
+  if (syllabus.status === "published") {
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center gap-4">
+          <Button variant="ghost" size="sm" onClick={() => router.back()}>
+            <ArrowLeft className="mr-2 h-4 w-4" />
+            Back
+          </Button>
+          <h1 className="text-2xl font-semibold">Edit Syllabus</h1>
+        </div>
+        <div className="text-center py-12">
+          <p className="text-muted-foreground mb-4">
+            This syllabus is published and cannot be edited directly.
+          </p>
+          <p className="text-sm text-muted-foreground mb-4">
+            To make changes, create a revision from the syllabus detail page.
+          </p>
+          <Button onClick={() => router.push(`/sis/phase6/syllabus/${syllabus.id}`)}>
+            View Syllabus
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex items-center gap-4">

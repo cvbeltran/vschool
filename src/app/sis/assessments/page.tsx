@@ -70,7 +70,7 @@ export default function AssessmentsPage() {
     };
 
     fetchData();
-  }, [organizationId, isSuperAdmin, orgLoading]);
+  }, [organizationId, isSuperAdmin, orgLoading, role]);
 
   const fetchAssessments = async () => {
     try {
@@ -78,6 +78,10 @@ export default function AssessmentsPage() {
       const scope = role === "teacher" ? "mine" : "org";
       const filters: ListAssessmentsFilters = {
         scope,
+        // Pass organization context to avoid re-fetching profile
+        organization_id: organizationId,
+        role: originalRole || role,
+        is_super_admin: isSuperAdmin,
       };
 
       if (statusFilter !== "all") {

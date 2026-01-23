@@ -56,7 +56,7 @@ export interface Assessment {
   };
   school_year?: {
     id: string;
-    name: string;
+    year_label: string;
   };
 }
 
@@ -88,6 +88,7 @@ export interface CreateAssessmentPayload {
   label_id: string;
   rationale: string;
   status?: "draft" | "confirmed";
+  organization_id?: string | null; // Optional: if provided, will be used instead of getting from profile
 }
 
 export interface UpdateAssessmentPayload {
@@ -108,6 +109,7 @@ export interface CreateEvidenceLinkPayload {
   attendance_session_id?: string | null;
   attendance_record_id?: string | null;
   notes?: string | null;
+  organization_id?: string | null; // Optional: if provided, will be used instead of getting from profile
 }
 
 export interface UpdateEvidenceLinkPayload {
@@ -123,6 +125,10 @@ export interface ListAssessmentsFilters {
   label_set_id?: string;
   school_year_id?: string;
   term_period?: string;
+  // Optional: If provided, will be used instead of fetching from profile
+  organization_id?: string | null;
+  role?: string | null;
+  is_super_admin?: boolean;
 }
 
 export interface EvidenceCandidate {
@@ -204,7 +210,7 @@ async function enrichAssessments(assessments: any[]): Promise<Assessment[]> {
     schoolYearIds.length > 0
       ? supabase
           .from("school_years")
-          .select("id, name")
+          .select("id, year_label")
           .in("id", schoolYearIds)
       : Promise.resolve({ data: [] }),
   ]);
@@ -234,7 +240,7 @@ async function enrichAssessments(assessments: any[]): Promise<Assessment[]> {
     ])
   );
   const schoolYearMap = new Map(
-    (schoolYearData.data || []).map((sy) => [sy.id, { id: sy.id, name: sy.name }])
+    (schoolYearData.data || []).map((sy) => [sy.id, { id: sy.id, year_label: sy.year_label }])
   );
 
   // Enrich assessments
@@ -273,19 +279,55 @@ export async function listAssessments(
     throw new Error("No active session");
   }
 
-  const { data: profile, error: profileError } = await supabase
-    .from("profiles")
-    .select("organization_id, school_id, role, is_super_admin")
-    .eq("id", session.user.id)
-    .single();
+  // Use provided context or fetch from profile
+  let organizationId: string | null = null;
+  let role: string | null = null;
+  let isSuperAdmin = false;
 
-  if (profileError || !profile) {
-    console.error("Profile fetch error:", profileError);
-    throw new Error("Profile not found. Please ensure your profile is set up correctly.");
+  if (filters?.organization_id !== undefined && filters?.role !== undefined && filters?.is_super_admin !== undefined) {
+    // Use provided context
+    organizationId = filters.organization_id;
+    role = filters.role;
+    isSuperAdmin = filters.is_super_admin === true;
+  } else {
+    // Fetch from profile
+    const { data: profile, error: profileError } = await supabase
+      .from("profiles")
+      .select("organization_id, school_id, role, is_super_admin")
+      .eq("id", session.user.id)
+      .single();
+
+    if (profileError) {
+      console.error("Profile fetch error:", {
+        error: profileError,
+        code: profileError.code,
+        message: profileError.message,
+        details: profileError.details,
+        hint: profileError.hint,
+        userId: session.user.id,
+      });
+      
+      // Provide more specific error message based on error code
+      if (profileError.code === "PGRST116") {
+        throw new Error("Profile not found. Please contact an administrator to set up your profile.");
+      } else if (profileError.code === "42501") {
+        throw new Error("Permission denied. You may not have access to view your profile. Please contact an administrator.");
+      } else {
+        throw new Error(`Failed to load profile: ${profileError.message || "Unknown error"}. Please ensure your profile is set up correctly.`);
+      }
+    }
+
+    if (!profile) {
+      console.error("Profile is null but no error was returned", { userId: session.user.id });
+      throw new Error("Profile not found. Please contact an administrator to set up your profile.");
+    }
+
+    organizationId = profile.organization_id;
+    role = profile.role;
+    isSuperAdmin = profile.is_super_admin === true;
   }
 
-  const scope = filters?.scope || (profile.role === "teacher" ? "mine" : "org");
-  const isSuperAdmin = profile.is_super_admin === true;
+  const scope = filters?.scope || (role === "teacher" ? "mine" : "org");
 
   let query = supabase
     .from("assessments")
@@ -294,13 +336,13 @@ export async function listAssessments(
       teacher:profiles!assessments_teacher_id_fkey(id),
       learner:students!assessments_learner_id_fkey(id, first_name, last_name, student_number),
       label:assessment_labels!assessments_label_id_fkey(id, label_text, description),
-      school_year:school_years(id, name)
+      school_year:school_years(id, year_label)
     `)
     .is("archived_at", null);
 
   // Scope filtering
-  if (!isSuperAdmin && profile.organization_id) {
-    query = query.eq("organization_id", profile.organization_id);
+  if (!isSuperAdmin && organizationId) {
+    query = query.eq("organization_id", organizationId);
   }
 
   if (scope === "mine") {
@@ -355,7 +397,7 @@ export async function getAssessment(id: string): Promise<Assessment | null> {
       teacher:profiles!assessments_teacher_id_fkey(id),
       learner:students!assessments_learner_id_fkey(id, first_name, last_name, student_number),
       label:assessment_labels!assessments_label_id_fkey(id, label_text, description),
-      school_year:school_years(id, name)
+      school_year:school_years(id, year_label)
     `)
     .eq("id", id)
     .is("archived_at", null)
@@ -379,14 +421,17 @@ export async function createAssessment(
   payload: CreateAssessmentPayload
 ): Promise<Assessment> {
   const context = await getCurrentUserContext();
-  if (!context.organizationId) {
-    throw new Error("Organization context required");
+  
+  // Use provided organizationId or get from context
+  const organizationId = payload.organization_id || context.organizationId;
+  if (!organizationId) {
+    throw new Error("Organization context required. Please ensure your profile has an organization_id set.");
   }
 
   const { data, error } = await supabase
     .from("assessments")
     .insert({
-      organization_id: context.organizationId,
+      organization_id: organizationId,
       school_id: context.schoolId,
       teacher_id: context.userId,
       learner_id: payload.learner_id,
@@ -403,7 +448,7 @@ export async function createAssessment(
       teacher:profiles!assessments_teacher_id_fkey(id),
       learner:students!assessments_learner_id_fkey(id, first_name, last_name, student_number),
       label:assessment_labels!assessments_label_id_fkey(id, label_text, description),
-      school_year:school_years(id, name)
+      school_year:school_years(id, year_label)
     `)
     .single();
 
@@ -437,7 +482,7 @@ export async function updateAssessment(
       teacher:profiles!assessments_teacher_id_fkey(id),
       learner:students!assessments_learner_id_fkey(id, first_name, last_name, student_number),
       label:assessment_labels!assessments_label_id_fkey(id, label_text, description),
-      school_year:school_years(id, name)
+      school_year:school_years(id, year_label)
     `)
     .single();
 
@@ -518,14 +563,17 @@ export async function addEvidenceLink(
   linkPayload: CreateEvidenceLinkPayload
 ): Promise<AssessmentEvidenceLink> {
   const context = await getCurrentUserContext();
-  if (!context.organizationId) {
-    throw new Error("Organization context required");
+  
+  // Use provided organizationId or get from context
+  const organizationId = linkPayload.organization_id || context.organizationId;
+  if (!organizationId) {
+    throw new Error("Organization context required. Please ensure your profile has an organization_id set.");
   }
 
   const { data, error } = await supabase
     .from("assessment_evidence_links")
     .insert({
-      organization_id: context.organizationId,
+      organization_id: organizationId,
       assessment_id: assessmentId,
       evidence_type: linkPayload.evidence_type,
       observation_id: linkPayload.observation_id || null,
@@ -573,15 +621,111 @@ export async function updateEvidenceLink(
  * Archive evidence link (soft delete)
  */
 export async function archiveEvidenceLink(linkId: string): Promise<void> {
+  const context = await getCurrentUserContext();
+  
+  // First, fetch the link to verify the user is the creator and get created_by
+  const { data: link, error: fetchError } = await supabase
+    .from("assessment_evidence_links")
+    .select("created_by, organization_id, assessment_id")
+    .eq("id", linkId)
+    .single();
+
+  if (fetchError || !link) {
+    throw new Error(`Failed to fetch evidence link: ${fetchError?.message || "Link not found"}`);
+  }
+
+  // Debug: Log the link details
+  console.log("Archive Evidence Link Debug:", {
+    linkId,
+    userId: context.userId,
+    linkCreatedBy: link.created_by,
+    linkOrgId: link.organization_id,
+    assessmentId: link.assessment_id,
+    isCreator: link.created_by === context.userId,
+    createdByIsNull: link.created_by === null,
+    createdByIsUndefined: link.created_by === undefined,
+  });
+
+  // Also check the assessment details
+  const { data: assessment, error: assessmentError } = await supabase
+    .from("assessments")
+    .select("id, teacher_id, organization_id, archived_at, status")
+    .eq("id", link.assessment_id)
+    .single();
+
+  console.log("Archive Evidence Link - Assessment Debug:", {
+    assessmentExists: !!assessment,
+    assessmentError: assessmentError?.message,
+    assessmentTeacherId: assessment?.teacher_id,
+    assessmentOrgId: assessment?.organization_id,
+    linkOrgId: link.organization_id,
+    orgMatch: assessment?.organization_id === link.organization_id,
+    isTeacherOwner: assessment?.teacher_id === context.userId,
+    assessmentArchivedAt: assessment?.archived_at,
+    assessmentStatus: assessment?.status,
+  });
+
+  // Verify the user is the creator OR check if they own the assessment
+  if (link.created_by !== context.userId) {
+    // Check if user owns the assessment
+    const { data: assessment, error: assessmentError } = await supabase
+      .from("assessments")
+      .select("teacher_id, organization_id")
+      .eq("id", link.assessment_id)
+      .single();
+
+    if (assessmentError || !assessment) {
+      throw new Error("You can only archive evidence links you created or for assessments you own");
+    }
+
+    if (assessment.teacher_id !== context.userId) {
+      throw new Error("You can only archive evidence links you created or for assessments you own");
+    }
+
+    console.log("Archive allowed: User owns the assessment", {
+      assessmentTeacherId: assessment.teacher_id,
+      userId: context.userId,
+    });
+  }
+
+  // Test: Check if we can select the row (RLS check)
+  const { data: testSelect, error: selectError } = await supabase
+    .from("assessment_evidence_links")
+    .select("id, created_by, archived_at")
+    .eq("id", linkId)
+    .single();
+  
+  console.log("RLS Test - Can select row:", {
+    canSelect: !!testSelect,
+    selectError: selectError?.message,
+    currentArchivedAt: testSelect?.archived_at,
+  });
+
+  // Update with explicit created_by to ensure it's preserved
   const { error } = await supabase
     .from("assessment_evidence_links")
     .update({
       archived_at: new Date().toISOString(),
+      created_by: link.created_by, // Explicitly preserve created_by
     })
     .eq("id", linkId);
 
   if (error) {
-    throw new Error(`Failed to archive evidence link: ${error.message}`);
+    // Log the full error object to see what we're dealing with
+    console.error("Archive Evidence Link Error - Full Error Object:", error);
+    console.error("Archive Evidence Link Error - Error Stringified:", JSON.stringify(error, null, 2));
+    console.error("Archive Evidence Link Error - Error Properties:", {
+      message: error?.message,
+      code: error?.code,
+      details: error?.details,
+      hint: error?.hint,
+      hasMessage: 'message' in error,
+      hasCode: 'code' in error,
+      errorKeys: Object.keys(error || {}),
+    });
+    
+    const errorMessage = error?.message || error?.toString() || 'Unknown error';
+    throw new Error(`Failed to archive evidence link: ${errorMessage}`);
   }
 }
 

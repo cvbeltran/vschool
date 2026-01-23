@@ -5,9 +5,11 @@ import { useParams, useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { ArrowLeft, Edit, Archive, Plus } from "lucide-react";
+import { ArrowLeft, Edit, Archive, Plus, ExternalLink } from "lucide-react";
 import { normalizeRole } from "@/lib/rbac";
 import { getAssessment, listEvidenceLinks, archiveAssessment, type Assessment, type AssessmentEvidenceLink } from "@/lib/assessments";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { AlertDialog } from "@/components/ui/alert-dialog";
 
 export default function AssessmentDetailPage() {
   const params = useParams();
@@ -21,6 +23,11 @@ export default function AssessmentDetailPage() {
   const [originalRole, setOriginalRole] = useState<string | null>(null);
   const [archiving, setArchiving] = useState(false);
   const [canModify, setCanModify] = useState(false);
+  const [isArchiveDialogOpen, setIsArchiveDialogOpen] = useState(false);
+  const [isAlertDialogOpen, setIsAlertDialogOpen] = useState(false);
+  const [alertMessage, setAlertMessage] = useState("");
+  const [isRemoveEvidenceDialogOpen, setIsRemoveEvidenceDialogOpen] = useState(false);
+  const [evidenceToRemove, setEvidenceToRemove] = useState<AssessmentEvidenceLink | null>(null);
 
   useEffect(() => {
     const fetchData = async () => {
@@ -63,32 +70,6 @@ export default function AssessmentDetailPage() {
     }
   }, [assessmentId, router]);
 
-  const handleArchive = async () => {
-    if (!confirm("Are you sure you want to archive this assessment?")) {
-      return;
-    }
-
-    try {
-      setArchiving(true);
-      await archiveAssessment(assessmentId);
-      router.push("/sis/assessments");
-    } catch (error: any) {
-      console.error("Error archiving assessment:", error);
-      alert(error.message || "Failed to archive assessment");
-    } finally {
-      setArchiving(false);
-    }
-  };
-
-  if (loading) {
-    return (
-      <div className="space-y-6">
-        <h1 className="text-2xl font-semibold">Assessment</h1>
-        <div className="text-muted-foreground text-sm">Loading...</div>
-      </div>
-    );
-  }
-
   useEffect(() => {
     const checkPermissions = async () => {
       if (!assessment) return;
@@ -110,6 +91,45 @@ export default function AssessmentDetailPage() {
       checkPermissions();
     }
   }, [assessment, role, originalRole]);
+
+  // Helper function to get the URL for viewing evidence details
+  const getEvidenceUrl = (link: AssessmentEvidenceLink): string | null => {
+    switch (link.evidence_type) {
+      case "observation":
+        return link.observation_id ? `/sis/ams/observations/${link.observation_id}` : null;
+      case "experience":
+        return link.experience_id ? `/sis/ams/experiences/${link.experience_id}` : null;
+      case "teacher_reflection":
+        return link.teacher_reflection_id ? `/sis/reflection/${link.teacher_reflection_id}` : null;
+      case "student_feedback":
+        return link.student_feedback_id ? `/sis/feedback/${link.student_feedback_id}` : null;
+      case "portfolio_artifact":
+        return link.portfolio_artifact_id ? `/sis/phase6/portfolio/my/${link.portfolio_artifact_id}` : null;
+      case "attendance_session":
+        return link.attendance_session_id ? `/sis/phase6/attendance/sessions/${link.attendance_session_id}` : null;
+      case "attendance_record":
+        // Attendance records are part of a session, so link to the session
+        // We'd need to fetch the session_id from the record, but for now, we can't link directly
+        return null;
+      default:
+        return null;
+    }
+  };
+
+  const handleArchive = async () => {
+    try {
+      setArchiving(true);
+      await archiveAssessment(assessmentId);
+      router.push("/sis/assessments");
+    } catch (error: any) {
+      console.error("Error archiving assessment:", error);
+      setAlertMessage(error.message || "Failed to archive assessment");
+      setIsAlertDialogOpen(true);
+    } finally {
+      setArchiving(false);
+      setIsArchiveDialogOpen(false);
+    }
+  };
 
   if (loading) {
     return (
@@ -159,12 +179,12 @@ export default function AssessmentDetailPage() {
             </Button>
             <Button
               variant="outline"
-              onClick={handleArchive}
+              onClick={() => setIsArchiveDialogOpen(true)}
               disabled={archiving}
               className="gap-2"
             >
               <Archive className="size-4" />
-              {archiving ? "Archiving..." : "Archive"}
+              Archive
             </Button>
           </div>
         )}
@@ -221,7 +241,7 @@ export default function AssessmentDetailPage() {
             {assessment.school_year && (
               <div>
                 <div className="text-sm font-medium text-muted-foreground">School Year</div>
-                <div className="text-base">{assessment.school_year.name}</div>
+                <div className="text-base">{assessment.school_year.year_label}</div>
               </div>
             )}
             {assessment.term_period && (
@@ -300,47 +320,107 @@ export default function AssessmentDetailPage() {
             </div>
           ) : (
             <div className="space-y-3">
-              {evidenceLinks.map((link) => (
-                <div
-                  key={link.id}
-                  className="border rounded-lg p-4 flex items-start justify-between"
-                >
-                  <div className="flex-1">
-                    <div className="font-medium capitalize">{link.evidence_type.replace(/_/g, " ")}</div>
-                    {link.notes && (
-                      <div className="text-sm text-muted-foreground mt-1">{link.notes}</div>
-                    )}
-                    <div className="text-xs text-muted-foreground mt-1">
-                      Linked {new Date(link.created_at).toLocaleDateString()}
+              {evidenceLinks.map((link) => {
+                const evidenceUrl = getEvidenceUrl(link);
+                return (
+                  <div
+                    key={link.id}
+                    className="border rounded-lg p-4 flex items-start justify-between"
+                  >
+                    <div className="flex-1">
+                      <div className="flex items-center gap-2">
+                        <div className="font-medium capitalize">{link.evidence_type.replace(/_/g, " ")}</div>
+                        {evidenceUrl && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-6 px-2"
+                            onClick={() => router.push(evidenceUrl)}
+                            title="View evidence details"
+                          >
+                            <ExternalLink className="size-3" />
+                          </Button>
+                        )}
+                      </div>
+                      {link.notes && (
+                        <div className="text-sm text-muted-foreground mt-1">{link.notes}</div>
+                      )}
+                      <div className="text-xs text-muted-foreground mt-1">
+                        Linked {new Date(link.created_at).toLocaleDateString()}
+                      </div>
                     </div>
+                    {canModify && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => {
+                          setEvidenceToRemove(link);
+                          setIsRemoveEvidenceDialogOpen(true);
+                        }}
+                      >
+                        Remove
+                      </Button>
+                    )}
                   </div>
-                  {canModify && (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={async () => {
-                        // Archive evidence link
-                        if (confirm("Remove this evidence link?")) {
-                          try {
-                            const { archiveEvidenceLink } = await import("@/lib/assessments");
-                            await archiveEvidenceLink(link.id);
-                            const updated = await listEvidenceLinks(assessmentId);
-                            setEvidenceLinks(updated);
-                          } catch (error: any) {
-                            alert(error.message || "Failed to remove evidence link");
-                          }
-                        }
-                      }}
-                    >
-                      Remove
-                    </Button>
-                  )}
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </CardContent>
       </Card>
+
+      {/* Archive Confirmation Dialog */}
+      <ConfirmDialog
+        open={isArchiveDialogOpen}
+        onOpenChange={setIsArchiveDialogOpen}
+        title="Archive Assessment"
+        description="Are you sure you want to archive this assessment? This action can be undone later."
+        confirmText="Archive"
+        cancelText="Cancel"
+        variant="destructive"
+        onConfirm={handleArchive}
+        isLoading={archiving}
+      />
+
+      {/* Remove Evidence Confirmation Dialog */}
+      <ConfirmDialog
+        open={isRemoveEvidenceDialogOpen}
+        onOpenChange={(open) => {
+          setIsRemoveEvidenceDialogOpen(open);
+          if (!open) {
+            setEvidenceToRemove(null);
+          }
+        }}
+        title="Remove Evidence Link"
+        description="Are you sure you want to remove this evidence link? This action cannot be undone."
+        confirmText="Remove"
+        cancelText="Cancel"
+        variant="destructive"
+        onConfirm={async () => {
+          if (!evidenceToRemove) return;
+          try {
+            const { archiveEvidenceLink } = await import("@/lib/assessments");
+            await archiveEvidenceLink(evidenceToRemove.id);
+            const updated = await listEvidenceLinks(assessmentId);
+            setEvidenceLinks(updated);
+            setIsRemoveEvidenceDialogOpen(false);
+            setEvidenceToRemove(null);
+          } catch (error: any) {
+            setAlertMessage(error.message || "Failed to remove evidence link");
+            setIsAlertDialogOpen(true);
+            setIsRemoveEvidenceDialogOpen(false);
+          }
+        }}
+      />
+
+      {/* Alert Dialog */}
+      <AlertDialog
+        open={isAlertDialogOpen}
+        onOpenChange={setIsAlertDialogOpen}
+        title="Error"
+        message={alertMessage}
+        type="error"
+      />
     </div>
   );
 }

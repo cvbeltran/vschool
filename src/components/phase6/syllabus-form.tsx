@@ -328,65 +328,102 @@ export function SyllabusForm({
       }
 
       // Update contributors
-      if (isEdit) {
-        // Get existing contributors
-        const existingContributors = await listSyllabusContributors(syllabusId);
-        const existingIds = existingContributors
-          .map((c) => c.teacher_id)
-          .filter((id) => id !== (syllabus?.created_by || currentUserId));
+      // Get existing contributors (excluding the creator/lead teacher)
+      const existingContributors = await listSyllabusContributors(syllabusId);
+      const existingContributorIds = existingContributors
+        .map((c) => c.teacher_id)
+        .filter((id) => id !== (syllabus?.created_by || currentUserId));
 
-        // Remove contributors not in new list
-        for (const existingId of existingIds) {
-          if (!selectedContributors.includes(existingId)) {
-            try {
-              await manageContributors(syllabusId, "remove", {
-                teacher_id: existingId,
-              });
-            } catch (err: any) {
-              console.warn(`Failed to remove contributor:`, err);
-            }
-          }
+      // Determine which contributors to remove (exist but not in selected list)
+      const contributorsToRemove = existingContributorIds.filter(
+        (id) => !selectedContributors.includes(id)
+      );
+
+      // Determine which contributors to add/update (in selected list but not exist, or exist but need update)
+      const contributorsToAddOrUpdate = selectedContributors.filter(
+        (id) => id !== currentUserId
+      );
+
+      // Remove contributors that are no longer selected
+      for (const contributorId of contributorsToRemove) {
+        try {
+          await manageContributors(syllabusId, "remove", {
+            teacher_id: contributorId,
+          });
+        } catch (err: any) {
+          console.error(`Failed to remove contributor ${contributorId}:`, err);
+          // Don't throw - continue with other operations
         }
       }
 
-      // Add new contributors
-      for (const contributorId of selectedContributors) {
-        if (contributorId !== currentUserId) {
-          try {
+      // Add or update contributors
+      for (const contributorId of contributorsToAddOrUpdate) {
+        try {
+          // Check if contributor already exists
+          const exists = existingContributorIds.includes(contributorId);
+          if (exists) {
+            // Update existing contributor
+            await manageContributors(syllabusId, "update", {
+              teacher_id: contributorId,
+              role: "contributor",
+              permissions: "edit",
+            });
+          } else {
+            // Add new contributor
             await manageContributors(syllabusId, "add", {
               teacher_id: contributorId,
               role: "contributor",
               permissions: "edit",
             });
-          } catch (err: any) {
-            // Might already exist, try update
-            try {
-              await manageContributors(syllabusId, "update", {
-                teacher_id: contributorId,
-                role: "contributor",
-                permissions: "edit",
-              });
-            } catch (updateErr: any) {
-              console.warn(`Failed to add contributor:`, updateErr);
-            }
           }
+        } catch (err: any) {
+          console.error(`Failed to add/update contributor ${contributorId}:`, err);
+          // Don't throw - continue with other operations
         }
       }
 
       // Update weeks
+      // Track which weeks we've processed
+      const processedWeekNumbers = new Set<number>();
+      
       for (const week of weeks) {
-        if (week.objectives.length > 0 || week.activities.length > 0) {
-          try {
-            await upsertSyllabusWeek(syllabusId, {
-              week_number: week.week_number,
-              week_start_date: week.week_start_date || null,
-              week_end_date: week.week_end_date || null,
-              objectives: week.objectives.filter((obj) => obj.trim().length > 0),
-              activities: week.activities.filter((act) => act.trim().length > 0),
-              verification_method: week.verification_method.trim() || null,
-            });
-          } catch (err: any) {
-            console.warn(`Failed to save week ${week.week_number}:`, err);
+        processedWeekNumbers.add(week.week_number);
+        try {
+          // Always update existing weeks, even if empty (to allow clearing objectives/activities)
+          await upsertSyllabusWeek(syllabusId, {
+            week_number: week.week_number,
+            week_start_date: week.week_start_date || null,
+            week_end_date: week.week_end_date || null,
+            objectives: week.objectives.filter((obj) => obj.trim().length > 0),
+            activities: week.activities.filter((act) => act.trim().length > 0),
+            verification_method: week.verification_method.trim() || null,
+          });
+        } catch (err: any) {
+          console.warn(`Failed to save week ${week.week_number}:`, err);
+        }
+      }
+
+      // Archive weeks that were removed from the form (exist in DB but not in form)
+      if (isEdit && existingWeekIds.size > 0) {
+        for (const [weekNumber, weekId] of existingWeekIds.entries()) {
+          if (!processedWeekNumbers.has(weekNumber)) {
+            // Week was removed from form, archive it
+            try {
+              const {
+                data: { session },
+              } = await supabase.auth.getSession();
+              if (session) {
+                await supabase
+                  .from("syllabus_weeks")
+                  .update({
+                    archived_at: new Date().toISOString(),
+                    updated_by: session.user.id,
+                  })
+                  .eq("id", weekId);
+              }
+            } catch (err: any) {
+              console.warn(`Failed to archive week ${weekNumber}:`, err);
+            }
           }
         }
       }

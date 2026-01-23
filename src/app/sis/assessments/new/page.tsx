@@ -100,12 +100,19 @@ export default function CreateAssessmentPage() {
       }
 
       try {
+        setError(null); // Clear any previous errors
         const labelsData = await listLabels(formData.label_set_id);
         setLabels(labelsData);
         setFormData((prev) => ({ ...prev, label_id: "" }));
+        
+        // Log warning if no labels found but label set is selected
+        if (labelsData.length === 0) {
+          console.warn(`No labels found for label set: ${formData.label_set_id}`);
+        }
       } catch (err: any) {
         console.error("Error fetching labels:", err);
-        setError(err.message || "Failed to load labels");
+        const errorMessage = err.message || "Failed to load labels";
+        setError(`Unable to load judgment labels: ${errorMessage}. Please ensure you have access to view labels in this label set.`);
       }
     };
 
@@ -134,6 +141,12 @@ export default function CreateAssessmentPage() {
       return;
     }
 
+    // Validate organization context
+    if (!organizationId) {
+      setError("Organization context is required. Please refresh the page and try again.");
+      return;
+    }
+
     try {
       setSubmitting(true);
       const assessment = await createAssessment({
@@ -146,6 +159,7 @@ export default function CreateAssessmentPage() {
         label_id: formData.label_id,
         rationale: formData.rationale.trim(),
         status: formData.status,
+        organization_id: organizationId, // Pass organizationId from hook
       });
 
       router.push(`/sis/assessments/${assessment.id}`);

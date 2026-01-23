@@ -720,18 +720,19 @@ export async function manageContributors(
   }
 
   if (action === "remove") {
-    const { error } = await supabase
-      .from("syllabus_contributors")
-      .update({
-        archived_at: new Date().toISOString(),
-        updated_by: session.user.id,
-      })
-      .eq("syllabus_id", syllabusId)
-      .eq("teacher_id", payload.teacher_id)
-      .is("archived_at", null);
+    // Use the database function to archive the contributor (bypasses RLS)
+    const { data, error } = await supabase.rpc("archive_syllabus_contributor", {
+      syllabus_id_param: syllabusId,
+      teacher_id_param: payload.teacher_id,
+      user_id_param: session.user.id,
+    });
 
     if (error) {
       throw new Error(`Failed to remove contributor: ${error.message}`);
+    }
+
+    if (!data) {
+      throw new Error("Failed to remove contributor: Permission denied or contributor not found");
     }
     return;
   }

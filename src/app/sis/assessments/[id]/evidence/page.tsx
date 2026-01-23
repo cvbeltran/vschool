@@ -15,7 +15,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { ArrowLeft, Plus, Check } from "lucide-react";
+import { ArrowLeft, Plus, Check, ExternalLink } from "lucide-react";
 import { getAssessment, addEvidenceLink, listEvidenceLinks, type Assessment, type AssessmentEvidenceLink } from "@/lib/assessments";
 
 type EvidenceType = "observation" | "experience" | "teacher_reflection" | "student_feedback" | "portfolio_artifact" | "attendance_session" | "attendance_record";
@@ -84,27 +84,57 @@ export default function EvidenceManagementPage() {
         : evidenceType === "attendance_session" ? "attendance_sessions"
         : "attendance_records";
 
+      // Select appropriate fields based on table structure
+      let selectFields = "id, created_at";
+      if (evidenceType === "observation" || evidenceType === "experience" || evidenceType === "portfolio_artifact") {
+        selectFields = "id, title, description, created_at";
+      } else if (evidenceType === "teacher_reflection") {
+        selectFields = "id, reflection_text, created_at";
+      } else if (evidenceType === "student_feedback") {
+        selectFields = "id, feedback_text, created_at";
+      } else if (evidenceType === "attendance_session") {
+        selectFields = "id, description, session_date, created_at";
+      } else if (evidenceType === "attendance_record") {
+        selectFields = "id, status, notes, created_at";
+      }
+
       query = supabase
         .from(tableName)
-        .select("id, title, description, created_at")
+        .select(selectFields)
         .is("archived_at", null);
 
       if (!profile.is_super_admin && profile.organization_id) {
         query = query.eq("organization_id", profile.organization_id);
       }
 
-      // Filter by learner if assessment has one
-      if (assessment.learner_id && (evidenceType === "observation" || evidenceType === "portfolio_artifact" || evidenceType === "attendance_record")) {
+      // Filter by appropriate field based on evidence type
+      if (evidenceType === "observation" && assessment.learner_id) {
         query = query.eq("learner_id", assessment.learner_id);
-      }
-
-      // Filter by teacher for teacher_reflection
-      if (evidenceType === "teacher_reflection" && assessment.teacher_id) {
+      } else if (evidenceType === "portfolio_artifact" && assessment.learner_id) {
+        query = query.eq("student_id", assessment.learner_id);
+      } else if (evidenceType === "attendance_record" && assessment.learner_id) {
+        query = query.eq("learner_id", assessment.learner_id);
+      } else if (evidenceType === "teacher_reflection" && assessment.teacher_id) {
         query = query.eq("teacher_id", assessment.teacher_id);
+      } else if (evidenceType === "attendance_session" && assessment.teacher_id) {
+        query = query.eq("teacher_id", assessment.teacher_id);
+      } else if (evidenceType === "student_feedback" && assessment.learner_id) {
+        query = query.eq("student_id", assessment.learner_id);
       }
 
       const { data } = await query.order("created_at", { ascending: false }).limit(50);
-      setCandidates(data || []);
+      
+      // Transform data to match expected format
+      const transformed = (data || []).map((item: any) => ({
+        id: item.id,
+        title: item.title || item.reflection_text || item.feedback_text || 
+              (evidenceType === "attendance_session" ? `Session ${item.session_date}` : null) ||
+              (evidenceType === "attendance_record" ? `Record ${item.status}` : null),
+        description: item.description || item.notes || null,
+        created_at: item.created_at,
+      }));
+      
+      setCandidates(transformed);
     } catch (err: any) {
       console.error("Error fetching candidates:", err);
       setError(err.message || "Failed to load evidence candidates");
@@ -117,9 +147,38 @@ export default function EvidenceManagementPage() {
     }
   }, [evidenceType, assessment]);
 
+  // Helper function to get the URL for viewing evidence details
+  const getEvidenceUrl = (link: AssessmentEvidenceLink): string | null => {
+    switch (link.evidence_type) {
+      case "observation":
+        return link.observation_id ? `/sis/ams/observations/${link.observation_id}` : null;
+      case "experience":
+        return link.experience_id ? `/sis/ams/experiences/${link.experience_id}` : null;
+      case "teacher_reflection":
+        return link.teacher_reflection_id ? `/sis/reflection/${link.teacher_reflection_id}` : null;
+      case "student_feedback":
+        return link.student_feedback_id ? `/sis/feedback/${link.student_feedback_id}` : null;
+      case "portfolio_artifact":
+        return link.portfolio_artifact_id ? `/sis/phase6/portfolio/my/${link.portfolio_artifact_id}` : null;
+      case "attendance_session":
+        return link.attendance_session_id ? `/sis/phase6/attendance/sessions/${link.attendance_session_id}` : null;
+      case "attendance_record":
+        // Attendance records are part of a session, so link to the session
+        // We'd need to fetch the session_id from the record, but for now, we can't link directly
+        return null;
+      default:
+        return null;
+    }
+  };
+
   const handleAddEvidence = async () => {
     if (!selectedCandidateId) {
       setError("Please select an evidence item");
+      return;
+    }
+
+    if (!assessment?.organization_id) {
+      setError("Assessment organization context is missing. Please refresh the page.");
       return;
     }
 
@@ -130,6 +189,7 @@ export default function EvidenceManagementPage() {
       const linkPayload: any = {
         evidence_type: evidenceType,
         notes: notes.trim() || null,
+        organization_id: assessment.organization_id, // Pass organization_id from assessment
       };
 
       // Set the appropriate ID field based on evidence type
@@ -232,20 +292,36 @@ export default function EvidenceManagementPage() {
             </div>
           ) : (
             <div className="space-y-3">
-              {evidenceLinks.map((link) => (
-                <div
-                  key={link.id}
-                  className="border rounded-lg p-4"
-                >
-                  <div className="font-medium capitalize">{link.evidence_type.replace(/_/g, " ")}</div>
-                  {link.notes && (
-                    <div className="text-sm text-muted-foreground mt-1">{link.notes}</div>
-                  )}
-                  <div className="text-xs text-muted-foreground mt-1">
-                    Linked {new Date(link.created_at).toLocaleDateString()}
+              {evidenceLinks.map((link) => {
+                const evidenceUrl = getEvidenceUrl(link);
+                return (
+                  <div
+                    key={link.id}
+                    className="border rounded-lg p-4"
+                  >
+                    <div className="flex items-center gap-2">
+                      <div className="font-medium capitalize">{link.evidence_type.replace(/_/g, " ")}</div>
+                      {evidenceUrl && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-6 px-2"
+                          onClick={() => router.push(evidenceUrl)}
+                          title="View evidence details"
+                        >
+                          <ExternalLink className="size-3" />
+                        </Button>
+                      )}
+                    </div>
+                    {link.notes && (
+                      <div className="text-sm text-muted-foreground mt-1">{link.notes}</div>
+                    )}
+                    <div className="text-xs text-muted-foreground mt-1">
+                      Linked {new Date(link.created_at).toLocaleDateString()}
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </CardContent>
