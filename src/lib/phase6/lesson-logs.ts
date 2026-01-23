@@ -261,23 +261,59 @@ export async function createLessonLog(
     throw new Error("No active session");
   }
 
+  // school_id is optional - use what's provided in payload or null
+  // Note: profiles table doesn't have school_id, so we can't fetch it from there
+  const schoolId = payload.school_id || null;
+
+  // Use the database function to create the lesson log (bypasses RLS)
+  // Ensure null values are properly passed (not undefined)
+  const rpcParams = {
+    organization_id_param: payload.organization_id,
+    school_id_param: schoolId ?? null,
+    teacher_id_param: payload.teacher_id,
+    syllabus_id_param: payload.syllabus_id ?? null,
+    syllabus_week_id_param: payload.syllabus_week_id ?? null,
+    week_start_date_param: payload.week_start_date,
+    week_end_date_param: payload.week_end_date,
+    status_param: payload.status || "draft",
+    notes_param: payload.notes ?? null,
+    user_id_param: session.user.id,
+  };
+  
+  console.log("Calling create_lesson_log RPC with params:", {
+    ...rpcParams,
+    user_id_param: "[REDACTED]",
+  });
+  
+  const { data: logId, error: rpcError } = await supabase.rpc("create_lesson_log", rpcParams);
+
+  if (rpcError) {
+    console.error("RPC Error details:", {
+      message: rpcError.message,
+      details: rpcError.details,
+      hint: rpcError.hint,
+      code: rpcError.code,
+    });
+    throw new Error(`Failed to create lesson log: ${rpcError.message}`);
+  }
+
+  if (!logId) {
+    throw new Error("Failed to create lesson log: Permission denied or invalid data");
+  }
+
+  // Fetch the created log
   const { data: log, error } = await supabase
     .from("weekly_lesson_logs")
-    .insert({
-      ...payload,
-      status: payload.status || "draft",
-      created_by: session.user.id,
-      updated_by: session.user.id,
-    })
     .select(`
       *,
       teacher_profile:profiles!weekly_lesson_logs_teacher_id_fkey(id),
       syllabus:syllabi(id, name)
     `)
+    .eq("id", logId)
     .single();
 
   if (error) {
-    throw new Error(`Failed to create lesson log: ${error.message}`);
+    throw new Error(`Failed to fetch created lesson log: ${error.message}`);
   }
 
   // Create items if provided

@@ -141,7 +141,15 @@ export default function SyllabusPage() {
               <CardHeader>
                 <div className="flex items-start justify-between">
                   <CardTitle className="text-lg">{syllabus.name}</CardTitle>
-                  <Badge variant={syllabus.status === "published" ? "default" : "secondary"}>
+                  <Badge
+                    variant={
+                      syllabus.status === "published"
+                        ? "default"
+                        : syllabus.status === "archived"
+                        ? "secondary"
+                        : "outline"
+                    }
+                  >
                     {syllabus.status}
                   </Badge>
                 </div>
@@ -171,7 +179,8 @@ export default function SyllabusPage() {
                     <Eye className="mr-2 h-4 w-4" />
                     View
                   </Button>
-                  {canEditAll && (
+                  {/* Only show Edit button for draft syllabi, or if admin can edit all */}
+                  {(syllabus.status === "draft" || canEditAll) && (
                     <Button
                       variant="outline"
                       size="sm"
@@ -181,7 +190,7 @@ export default function SyllabusPage() {
                       Edit
                     </Button>
                   )}
-                  {canEditAll && (
+                  {canEditAll && syllabus.status !== "archived" && (
                     <Button
                       variant="outline"
                       size="sm"

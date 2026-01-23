@@ -326,22 +326,50 @@ export async function createAttendanceSession(
     throw new Error("No active session");
   }
 
+  // Use the database function to create the attendance session (bypasses RLS)
+  // The function will parse the date and time strings
+  const rpcParams = {
+    organization_id_param: payload.organization_id,
+    school_id_param: payload.school_id ?? null,
+    teacher_id_param: payload.teacher_id,
+    session_date_param: payload.session_date,
+    session_time_param: payload.session_time ?? null,
+    syllabus_id_param: payload.syllabus_id ?? null,
+    lesson_log_id_param: payload.lesson_log_id ?? null,
+    experience_id_param: payload.experience_id ?? null,
+    description_param: payload.description ?? null,
+    user_id_param: session.user.id,
+  };
+
+  const { data: sessionId, error: rpcError } = await supabase.rpc("create_attendance_session", rpcParams);
+
+  if (rpcError) {
+    console.error("RPC Error details:", {
+      message: rpcError.message,
+      details: rpcError.details,
+      hint: rpcError.hint,
+      code: rpcError.code,
+    });
+    throw new Error(`Failed to create attendance session: ${rpcError.message}`);
+  }
+
+  if (!sessionId) {
+    throw new Error("Failed to create attendance session: Permission denied or invalid data");
+  }
+
+  // Fetch the created session
   const { data: attendanceSession, error } = await supabase
     .from("attendance_sessions")
-    .insert({
-      ...payload,
-      created_by: session.user.id,
-      updated_by: session.user.id,
-    })
     .select(`
       *,
       teacher_profile:profiles!attendance_sessions_teacher_id_fkey(id),
       syllabus:syllabi(id, name)
     `)
+    .eq("id", sessionId)
     .single();
 
   if (error) {
-    throw new Error(`Failed to create attendance session: ${error.message}`);
+    throw new Error(`Failed to fetch created attendance session: ${error.message}`);
   }
 
   const enriched = await enrichAttendanceSessionsWithTeacherNames([attendanceSession]);
@@ -467,53 +495,150 @@ export async function upsertAttendanceRecord(
     .is("archived_at", null)
     .single();
 
-  if (existing.data) {
-    // Update
-    const { data: record, error } = await supabase
-      .from("attendance_records")
-      .update({
-        status,
-        notes: notes || null,
-        updated_by: session.user.id,
-      })
-      .eq("id", existing.data.id)
-      .select(`
-        *,
-        learner:students!attendance_records_learner_id_fkey(id, first_name, last_name, student_number)
-      `)
-      .single();
+  // Use the database function to create/update the attendance record (bypasses RLS)
+  const rpcParams = {
+    organization_id_param: attendanceSession.organization_id,
+    school_id_param: attendanceSession.school_id ?? null,
+    session_id_param: sessionId,
+    learner_id_param: learnerId,
+    status_param: status,
+    notes_param: notes ?? null,
+    user_id_param: session.user.id,
+    existing_record_id_param: existing.data?.id ?? null,
+  };
 
-    if (error) {
-      throw new Error(`Failed to update attendance record: ${error.message}`);
-    }
+  const { data: recordId, error: rpcError } = await supabase.rpc("upsert_attendance_record", rpcParams);
 
-    return record as AttendanceRecord;
-  } else {
-    // Create
-    const { data: record, error } = await supabase
-      .from("attendance_records")
-      .insert({
-        organization_id: attendanceSession.organization_id,
-        school_id: attendanceSession.school_id,
-        session_id: sessionId,
-        learner_id: learnerId,
-        status,
-        notes: notes || null,
-        created_by: session.user.id,
-        updated_by: session.user.id,
-      })
-      .select(`
-        *,
-        learner:students!attendance_records_learner_id_fkey(id, first_name, last_name, student_number)
-      `)
-      .single();
-
-    if (error) {
-      throw new Error(`Failed to create attendance record: ${error.message}`);
-    }
-
-    return record as AttendanceRecord;
+  if (rpcError) {
+    console.error("RPC Error details:", {
+      message: rpcError.message,
+      details: rpcError.details,
+      hint: rpcError.hint,
+      code: rpcError.code,
+    });
+    throw new Error(`Failed to create/update attendance record: ${rpcError.message}`);
   }
+
+  if (!recordId) {
+    throw new Error("Failed to create/update attendance record: Permission denied or invalid data");
+  }
+
+  // Fetch the created/updated record
+  const { data: record, error } = await supabase
+    .from("attendance_records")
+    .select(`
+      *,
+      learner:students!attendance_records_learner_id_fkey(id, first_name, last_name, student_number)
+    `)
+    .eq("id", recordId)
+    .single();
+
+  if (error) {
+    throw new Error(`Failed to fetch attendance record: ${error.message}`);
+  }
+
+  return record as AttendanceRecord;
+}
+
+/**
+ * List student's own attendance records
+ * Students can view their own attendance records across all sessions
+ */
+export async function listMyStudentAttendance(
+  filters?: {
+    session_date_from?: string;
+    session_date_to?: string;
+    status?: "present" | "absent" | "late";
+  }
+): Promise<AttendanceRecord[]> {
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
+  if (!session) {
+    throw new Error("No active session");
+  }
+
+  // Get student ID from email match
+  const { data: user } = await supabase.auth.getUser();
+  if (!user?.user?.email) {
+    throw new Error("User email not found");
+  }
+
+  // Get organization_id from profile
+  const { data: profile } = await supabase
+    .from("profiles")
+    .select("organization_id")
+    .eq("id", session.user.id)
+    .single();
+
+  if (!profile) {
+    throw new Error("Profile not found");
+  }
+
+  // Find student by email
+  const { data: student } = await supabase
+    .from("students")
+    .select("id")
+    .eq("primary_email", user.user.email)
+    .eq("organization_id", profile.organization_id)
+    .maybeSingle();
+
+  if (!student) {
+    throw new Error("Student ID not found. Please ensure your account is linked to a student record.");
+  }
+
+  // First, get session IDs filtered by date if needed
+  let sessionIds: string[] | null = null;
+  if (filters?.session_date_from || filters?.session_date_to) {
+    let sessionQuery = supabase
+      .from("attendance_sessions")
+      .select("id")
+      .eq("organization_id", profile.organization_id)
+      .is("archived_at", null);
+
+    if (filters?.session_date_from) {
+      sessionQuery = sessionQuery.gte("session_date", filters.session_date_from);
+    }
+    if (filters?.session_date_to) {
+      sessionQuery = sessionQuery.lte("session_date", filters.session_date_to);
+    }
+
+    const { data: sessions } = await sessionQuery;
+    sessionIds = sessions?.map((s) => s.id) || [];
+    if (sessionIds.length === 0) {
+      // No sessions match the date filter, return empty array
+      return [];
+    }
+  }
+
+  // Build query for attendance records
+  let query = supabase
+    .from("attendance_records")
+    .select(`
+      *,
+      learner:students!attendance_records_learner_id_fkey(id, first_name, last_name, student_number),
+      session:attendance_sessions!attendance_records_session_id_fkey(id, session_date, session_time, description)
+    `)
+    .eq("learner_id", student.id)
+    .is("archived_at", null);
+
+  if (sessionIds) {
+    query = query.in("session_id", sessionIds);
+  }
+
+  if (filters?.status) {
+    query = query.eq("status", filters.status);
+  }
+
+  query = query.order("created_at", { ascending: false });
+
+  const { data, error } = await query;
+
+  if (error) {
+    throw new Error(`Failed to list student attendance: ${error.message}`);
+  }
+
+  return (data || []) as AttendanceRecord[];
 }
 
 /**
@@ -606,22 +731,47 @@ export async function createMyTeacherAttendance(
     throw new Error("No active session");
   }
 
+  // Use the database function to create the teacher attendance record (bypasses RLS)
+  const rpcParams = {
+    organization_id_param: payload.organization_id,
+    school_id_param: payload.school_id ?? null,
+    teacher_id_param: session.user.id, // Always use the current user's ID
+    attendance_date_param: payload.attendance_date,
+    status_param: payload.status,
+    notes_param: payload.notes ?? null,
+    session_id_param: payload.session_id ?? null,
+    experience_id_param: payload.experience_id ?? null,
+    user_id_param: session.user.id,
+  };
+
+  const { data: recordId, error: rpcError } = await supabase.rpc("create_teacher_attendance", rpcParams);
+
+  if (rpcError) {
+    console.error("RPC Error details:", {
+      message: rpcError.message,
+      details: rpcError.details,
+      hint: rpcError.hint,
+      code: rpcError.code,
+    });
+    throw new Error(`Failed to create teacher attendance: ${rpcError.message}`);
+  }
+
+  if (!recordId) {
+    throw new Error("Failed to create teacher attendance: Permission denied or invalid data");
+  }
+
+  // Fetch the created record
   const { data: teacherAttendance, error } = await supabase
     .from("teacher_attendance")
-    .insert({
-      ...payload,
-      teacher_id: session.user.id,
-      created_by: session.user.id,
-      updated_by: session.user.id,
-    })
     .select(`
       *,
       teacher_profile:profiles!teacher_attendance_teacher_id_fkey(id)
     `)
+    .eq("id", recordId)
     .single();
 
   if (error) {
-    throw new Error(`Failed to create teacher attendance: ${error.message}`);
+    throw new Error(`Failed to fetch created teacher attendance: ${error.message}`);
   }
 
   const enriched = await enrichTeacherAttendanceWithTeacherNames([teacherAttendance]);
