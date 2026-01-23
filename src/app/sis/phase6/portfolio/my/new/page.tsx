@@ -13,6 +13,7 @@ import { useOrganization } from "@/lib/hooks/use-organization";
 import {
   createMyPortfolioArtifact,
   type CreateMyPortfolioArtifactPayload,
+  type PortfolioArtifactAttachment,
 } from "@/lib/phase6/portfolio";
 
 export default function NewPortfolioArtifactPage() {
@@ -27,7 +28,10 @@ export default function NewPortfolioArtifactPage() {
     description: "",
     file_url: "",
     text_content: "",
-    visibility: "internal" as "internal" | "private" | "shared",
+    visibility: "private" as "internal" | "private" | "shared",
+    occurred_on: "",
+    evidence_type: "",
+    attachments: [] as PortfolioArtifactAttachment[],
   });
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -69,6 +73,10 @@ export default function NewPortfolioArtifactPage() {
         file_url: formData.artifact_type === "upload" || formData.artifact_type === "link" ? formData.file_url.trim() || null : null,
         text_content: formData.artifact_type === "text" ? formData.text_content.trim() || null : null,
         visibility: formData.visibility,
+        occurred_on: formData.occurred_on || null,
+        evidence_type: formData.evidence_type || null,
+        attachments: formData.attachments.length > 0 ? formData.attachments : null,
+        source: "student_upload",
       };
 
       const artifact = await createMyPortfolioArtifact(payload);
@@ -219,6 +227,35 @@ export default function NewPortfolioArtifactPage() {
                 />
               </div>
             )}
+
+            <div className="space-y-2">
+              <Label htmlFor="occurred_on">Occurred On</Label>
+              <Input
+                id="occurred_on"
+                type="date"
+                value={formData.occurred_on}
+                onChange={(e) =>
+                  setFormData({ ...formData, occurred_on: e.target.value })
+                }
+                disabled={loading}
+              />
+              <p className="text-xs text-muted-foreground">
+                Date when this artifact/evidence occurred (not when uploaded)
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="evidence_type">Evidence Type</Label>
+              <Input
+                id="evidence_type"
+                value={formData.evidence_type}
+                onChange={(e) =>
+                  setFormData({ ...formData, evidence_type: e.target.value })
+                }
+                placeholder="e.g., observation, assessment, reflection, project"
+                disabled={loading}
+              />
+            </div>
 
             <div className="space-y-2">
               <Label htmlFor="visibility">Visibility</Label>

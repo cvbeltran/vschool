@@ -82,7 +82,7 @@ export default function EditAssessmentPage() {
         const canEdit =
           (role === "teacher" && assessmentData.teacher_id === session?.user.id) ||
           role === "principal" ||
-          (role === "admin" && profile?.role !== "registrar");
+          (role === "admin" && originalRole !== "registrar");
         
         if (!canEdit) {
           setError("You do not have permission to edit this assessment.");
@@ -110,7 +110,7 @@ export default function EditAssessmentPage() {
         }
 
         // Fetch school years
-        const { data: profile: profileData } = await supabase
+        const { data: profileData } = await supabase
           .from("profiles")
           .select("organization_id, is_super_admin")
           .eq("id", session?.user.id || "")
@@ -216,7 +216,7 @@ export default function EditAssessmentPage() {
     );
   }
 
-  if (error && error.includes("permission") || error.includes("finalized")) {
+  if (error && (error.includes("permission") || error.includes("finalized"))) {
     return (
       <div className="space-y-6">
         <div className="flex items-center gap-4">

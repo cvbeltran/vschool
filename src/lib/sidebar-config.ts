@@ -36,6 +36,9 @@ import {
   BarChart3,
   FolderOpen,
   TrendingUp,
+  Clock3,
+  Building,
+  CalendarClock,
 } from "lucide-react";
 import { LucideIcon } from "lucide-react";
 
@@ -121,22 +124,54 @@ export const sidebarConfig: SidebarSection[] = [
     defaultCollapsed: false,
     items: [
       {
-        label: "Attendance",
-        href: "/sis/attendance",
-        icon: Calendar,
+        label: "Batches",
+        href: "/sis/operations/batches",
+        icon: BookOpen,
         allowedRoles: ["principal", "admin", "teacher"],
       },
       {
         label: "Sections",
-        href: "/sis/sections",
+        href: "/sis/operations/sections",
         icon: FolderTree,
         allowedRoles: ["principal", "admin", "teacher"],
       },
       {
-        label: "Batches",
-        href: "/sis/batches",
-        icon: BookOpen,
+        label: "Attendance",
+        href: "/sis/operations/attendance",
+        icon: Calendar,
         allowedRoles: ["principal", "admin", "teacher"],
+      },
+      {
+        label: "Portfolio",
+        href: "/sis/operations/portfolio",
+        icon: FolderOpen,
+        allowedRoles: ["principal", "admin", "teacher"],
+      },
+      {
+        label: "Scheduling",
+        href: "/sis/operations/scheduling/sections",
+        icon: CalendarClock,
+        allowedRoles: ["principal", "admin", "teacher"],
+        children: [
+          {
+            label: "Periods",
+            href: "/sis/operations/scheduling/periods",
+            icon: Clock3,
+            allowedRoles: ["principal", "admin"],
+          },
+          {
+            label: "Rooms",
+            href: "/sis/operations/scheduling/rooms",
+            icon: Building,
+            allowedRoles: ["principal", "admin"],
+          },
+          {
+            label: "Section Scheduling",
+            href: "/sis/operations/scheduling/sections",
+            icon: CalendarClock,
+            allowedRoles: ["principal", "admin", "teacher"],
+          },
+        ],
       },
     ],
   },
