@@ -1,10 +1,11 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Label } from "@/components/ui/label";
 import {
   Dialog,
   DialogContent,
@@ -13,9 +14,11 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { ArrowLeft, Edit2, Archive, ExternalLink } from "lucide-react";
+import { ArrowLeft, Edit2, Archive, ExternalLink, FileText, Download } from "lucide-react";
+import { isImageFile, getFileNameFromUrl } from "@/lib/student/file-upload";
 import {
   getMyPortfolioArtifact,
+  getPortfolioArtifactById,
   archiveMyPortfolioArtifact,
   listPortfolioArtifactTags,
   listPortfolioArtifactLinks,
@@ -23,11 +26,15 @@ import {
   type PortfolioArtifactTag,
   type PortfolioArtifactLink,
 } from "@/lib/phase6/portfolio";
+import { supabase } from "@/lib/supabase/client";
+import { normalizeRole } from "@/lib/rbac";
 
 export default function PortfolioArtifactDetailPage() {
   const params = useParams();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const id = params.id as string;
+  const studentParam = searchParams.get("student");
 
   const [artifact, setArtifact] = useState<PortfolioArtifact | null>(null);
   const [tags, setTags] = useState<PortfolioArtifactTag[]>([]);
@@ -36,11 +43,71 @@ export default function PortfolioArtifactDetailPage() {
   const [error, setError] = useState<string | null>(null);
   const [archiving, setArchiving] = useState(false);
   const [showArchiveDialog, setShowArchiveDialog] = useState(false);
+  const [isStudent, setIsStudent] = useState<boolean | null>(null);
+  const [role, setRole] = useState<"student" | "teacher" | "admin" | "principal" | null>(null);
 
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const artifactData = await getMyPortfolioArtifact(id);
+        // Determine if user is a student
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+        
+        if (!session) {
+          setError("Please log in to access this artifact");
+          setLoading(false);
+          return;
+        }
+
+        // Get user role
+        const { data: profile } = await supabase
+          .from("profiles")
+          .select("role")
+          .eq("id", session.user.id)
+          .single();
+
+        const normalizedRole = normalizeRole(profile?.role || "");
+        setRole(normalizedRole);
+
+        // Check if user is a student
+        const { data: user } = await supabase.auth.getUser();
+        let studentFound = false;
+        
+        if (user?.user?.email && profile) {
+          const { data: profileWithOrg } = await supabase
+            .from("profiles")
+            .select("organization_id")
+            .eq("id", session.user.id)
+            .single();
+          
+          if (profileWithOrg?.organization_id) {
+            const { data: student } = await supabase
+              .from("students")
+              .select("id")
+              .eq("primary_email", user.user.email)
+              .eq("organization_id", profileWithOrg.organization_id)
+              .maybeSingle();
+            
+            if (student) {
+              studentFound = true;
+            }
+          }
+        }
+
+        setIsStudent(studentFound);
+
+        // Use appropriate function based on whether user is a student or teacher/admin viewing student's artifact
+        let artifactData: PortfolioArtifact | null = null;
+        
+        if (studentFound && !studentParam) {
+          // Student viewing their own artifact
+          artifactData = await getMyPortfolioArtifact(id);
+        } else {
+          // Teacher/admin viewing any artifact (or student viewing via student param)
+          artifactData = await getPortfolioArtifactById(id);
+        }
+
         if (!artifactData) {
           setError("Portfolio artifact not found");
           setLoading(false);
@@ -64,14 +131,29 @@ export default function PortfolioArtifactDetailPage() {
     };
 
     fetchData();
-  }, [id]);
+  }, [id, studentParam]);
 
   const handleArchive = async () => {
     if (!artifact) return;
     setArchiving(true);
     try {
-      await archiveMyPortfolioArtifact(id);
-      router.push("/sis/phase6/portfolio/my");
+      // Only allow students to archive their own artifacts
+      if (isStudent) {
+        await archiveMyPortfolioArtifact(id);
+      } else {
+        // For teachers/admins, we could add a different archive function, but for now just show error
+        setError("Only students can archive their own portfolio artifacts");
+        setArchiving(false);
+        setShowArchiveDialog(false);
+        return;
+      }
+      
+      // Navigate back with student param if present
+      if (studentParam) {
+        router.push(`/sis/phase6/portfolio/my?student=${studentParam}`);
+      } else {
+        router.push("/sis/phase6/portfolio/my");
+      }
     } catch (err: any) {
       console.error("Error archiving artifact:", err);
       setError(err.message || "Failed to archive artifact");
@@ -108,27 +190,46 @@ export default function PortfolioArtifactDetailPage() {
   return (
     <div className="space-y-6">
       <div className="flex items-center gap-4">
-        <Button variant="ghost" size="sm" onClick={() => router.back()}>
+        <Button 
+          variant="ghost" 
+          size="sm" 
+          onClick={() => {
+            if (studentParam) {
+              router.push(`/sis/phase6/portfolio/my?student=${studentParam}`);
+            } else {
+              router.back();
+            }
+          }}
+        >
           <ArrowLeft className="mr-2 h-4 w-4" />
           Back
         </Button>
         <h1 className="text-2xl font-semibold">Portfolio Artifact</h1>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => router.push(`/sis/phase6/portfolio/my/${id}/edit`)}
-        >
-          <Edit2 className="mr-2 h-4 w-4" />
-          Edit
-        </Button>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => setShowArchiveDialog(true)}
-        >
-          <Archive className="mr-2 h-4 w-4" />
-          Archive
-        </Button>
+        {isStudent && (
+          <>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                const editUrl = studentParam 
+                  ? `/sis/phase6/portfolio/my/${id}/edit?student=${studentParam}`
+                  : `/sis/phase6/portfolio/my/${id}/edit`;
+                router.push(editUrl);
+              }}
+            >
+              <Edit2 className="mr-2 h-4 w-4" />
+              Edit
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setShowArchiveDialog(true)}
+            >
+              <Archive className="mr-2 h-4 w-4" />
+              Archive
+            </Button>
+          </>
+        )}
       </div>
 
       {error && (
@@ -156,17 +257,52 @@ export default function PortfolioArtifactDetailPage() {
           {artifact.artifact_type === "upload" && artifact.file_url && (
             <div>
               <Label className="text-muted-foreground">File</Label>
-              <div className="mt-1">
-                <a
-                  href={artifact.file_url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-sm text-blue-600 hover:underline flex items-center gap-1"
-                >
-                  {artifact.file_url}
-                  <ExternalLink className="h-3 w-3" />
-                </a>
-              </div>
+              {isImageFile(artifact.file_url) ? (
+                <div className="space-y-2 mt-1">
+                  <img
+                    src={artifact.file_url}
+                    alt={artifact.title}
+                    className="max-w-full max-h-96 rounded-md border object-contain"
+                    onError={(e) => {
+                      // Fallback to link if image fails to load
+                      const target = e.target as HTMLImageElement;
+                      target.style.display = "none";
+                      const parent = target.parentElement;
+                      if (parent) {
+                        const link = parent.querySelector("a");
+                        if (link) {
+                          link.style.display = "flex";
+                        }
+                      }
+                    }}
+                  />
+                  <a
+                    href={artifact.file_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-sm text-blue-600 hover:underline flex items-center gap-1"
+                  >
+                    <Download className="h-3 w-3" />
+                    Download {getFileNameFromUrl(artifact.file_url)}
+                  </a>
+                </div>
+              ) : (
+                <div className="space-y-2 mt-1">
+                  <div className="flex items-center gap-2 p-3 border rounded-md bg-muted/50">
+                    <FileText className="h-5 w-5 text-muted-foreground" />
+                    <span className="text-sm font-medium">{getFileNameFromUrl(artifact.file_url)}</span>
+                  </div>
+                  <a
+                    href={artifact.file_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-sm text-blue-600 hover:underline flex items-center gap-1"
+                  >
+                    <Download className="h-3 w-3" />
+                    Download file
+                  </a>
+                </div>
+              )}
             </div>
           )}
 

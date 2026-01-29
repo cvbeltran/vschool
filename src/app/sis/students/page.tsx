@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase/client";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { Download, ExternalLink } from "lucide-react";
 import { useOrganization } from "@/lib/hooks/use-organization";
 
@@ -14,6 +15,8 @@ interface Student {
   last_name: string;
   email: string;
   batch_id: string | null;
+  profile_id?: string | null;
+  must_reset_password?: boolean | null;
 }
 
 type Role = "principal" | "admin";
@@ -47,7 +50,7 @@ export default function StudentsPage() {
       // Fetch students - filter by organization_id unless super admin
       let query = supabase
         .from("students")
-        .select("id, first_name, last_name, email, batch_id");
+        .select("id, first_name, last_name, email, batch_id, profile_id, must_reset_password");
       
       if (!isSuperAdmin && organizationId) {
         query = query.eq("organization_id", organizationId);
@@ -122,6 +125,9 @@ export default function StudentsPage() {
                   Batch
                 </th>
                 <th className="px-4 py-3 text-left text-sm font-medium">
+                  Status
+                </th>
+                <th className="px-4 py-3 text-left text-sm font-medium">
                   Actions
                 </th>
               </tr>
@@ -135,6 +141,15 @@ export default function StudentsPage() {
                   <td className="px-4 py-3 text-sm">{student.email || <span className="text-muted-foreground">—</span>}</td>
                   <td className="px-4 py-3 text-sm">
                     {student.batch_id || <span className="text-muted-foreground">Unassigned</span>}
+                  </td>
+                  <td className="px-4 py-3">
+                    {!student.profile_id ? (
+                      <Badge variant="outline">Not invited</Badge>
+                    ) : student.must_reset_password ? (
+                      <Badge className="bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200">Invited</Badge>
+                    ) : (
+                      <Badge className="bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200">Active</Badge>
+                    )}
                   </td>
                   <td className="px-4 py-3">
                     <Button

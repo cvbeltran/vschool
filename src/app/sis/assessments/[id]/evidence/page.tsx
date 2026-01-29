@@ -86,7 +86,13 @@ export default function EvidenceManagementPage() {
 
       // Select appropriate fields based on table structure
       let selectFields = "id, created_at";
-      if (evidenceType === "observation" || evidenceType === "experience" || evidenceType === "portfolio_artifact") {
+      if (evidenceType === "observation") {
+        // Observations have: notes (not title), no description field
+        selectFields = "id, notes, observed_at, created_at, learner_id, experience_id, competency_id";
+      } else if (evidenceType === "experience") {
+        // Experiences have: name (not title), description
+        selectFields = "id, name, description, created_at";
+      } else if (evidenceType === "portfolio_artifact") {
         selectFields = "id, title, description, created_at";
       } else if (evidenceType === "teacher_reflection") {
         selectFields = "id, reflection_text, created_at";
@@ -108,8 +114,17 @@ export default function EvidenceManagementPage() {
       }
 
       // Filter by appropriate field based on evidence type
-      if (evidenceType === "observation" && assessment.learner_id) {
-        query = query.eq("learner_id", assessment.learner_id);
+      if (evidenceType === "observation") {
+        // Filter observations by learner_id if available
+        if (assessment.learner_id) {
+          query = query.eq("learner_id", assessment.learner_id);
+        }
+        // Also filter by status='active' to exclude withdrawn observations
+        query = query.eq("status", "active");
+      } else if (evidenceType === "experience") {
+        // Experiences don't filter by learner - they're shared activities
+        // But we could filter by teacher if they created it, or by organization (already done above)
+        // For now, show all experiences in the organization
       } else if (evidenceType === "portfolio_artifact" && assessment.learner_id) {
         query = query.eq("student_id", assessment.learner_id);
       } else if (evidenceType === "attendance_record" && assessment.learner_id) {
@@ -125,14 +140,42 @@ export default function EvidenceManagementPage() {
       const { data } = await query.order("created_at", { ascending: false }).limit(50);
       
       // Transform data to match expected format
-      const transformed = (data || []).map((item: any) => ({
-        id: item.id,
-        title: item.title || item.reflection_text || item.feedback_text || 
-              (evidenceType === "attendance_session" ? `Session ${item.session_date}` : null) ||
-              (evidenceType === "attendance_record" ? `Record ${item.status}` : null),
-        description: item.description || item.notes || null,
-        created_at: item.created_at,
-      }));
+      const transformed = (data || []).map((item: any) => {
+        let title: string | null = null;
+        let description: string | null = null;
+
+        if (evidenceType === "observation") {
+          // Observations: use notes as title, format with learner/competency info if available
+          title = item.notes || `Observation ${item.observed_at ? new Date(item.observed_at).toLocaleDateString() : ''}`;
+          description = item.observed_at ? `Observed: ${new Date(item.observed_at).toLocaleDateString()}` : null;
+        } else if (evidenceType === "experience") {
+          // Experiences: use name as title
+          title = item.name || `Experience ${item.id.slice(0, 8)}`;
+          description = item.description || null;
+        } else if (evidenceType === "portfolio_artifact") {
+          title = item.title || `Artifact ${item.id.slice(0, 8)}`;
+          description = item.description || null;
+        } else if (evidenceType === "teacher_reflection") {
+          title = item.reflection_text ? item.reflection_text.substring(0, 100) : `Reflection ${item.id.slice(0, 8)}`;
+          description = null;
+        } else if (evidenceType === "student_feedback") {
+          title = item.feedback_text ? item.feedback_text.substring(0, 100) : `Feedback ${item.id.slice(0, 8)}`;
+          description = null;
+        } else if (evidenceType === "attendance_session") {
+          title = `Session ${item.session_date ? new Date(item.session_date).toLocaleDateString() : ''}`;
+          description = item.description || null;
+        } else if (evidenceType === "attendance_record") {
+          title = `Record ${item.status || 'Unknown'}`;
+          description = item.notes || null;
+        }
+
+        return {
+          id: item.id,
+          title: title || `Evidence ${item.id.slice(0, 8)}`,
+          description,
+          created_at: item.created_at,
+        };
+      });
       
       setCandidates(transformed);
     } catch (err: any) {

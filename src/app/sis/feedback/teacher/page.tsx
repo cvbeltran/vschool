@@ -14,30 +14,56 @@ import { Badge } from "@/components/ui/badge";
 import { useOrganization } from "@/lib/hooks/use-organization";
 import {
   listTeacherFeedbackFromView,
+  listStudentFeedback,
   type TeacherFeedbackView,
+  type StudentFeedback,
 } from "@/lib/feedback";
 import { listFeedbackDimensions, type FeedbackDimension } from "@/lib/feedback";
 import { getExperiences, type Experience } from "@/lib/ams";
+import { normalizeRole } from "@/lib/rbac";
+
+type FeedbackItem = TeacherFeedbackView | StudentFeedback;
 
 export default function TeacherFeedbackPage() {
   const { organizationId, isSuperAdmin, isLoading: orgLoading } =
     useOrganization();
-  const [feedback, setFeedback] = useState<TeacherFeedbackView[]>([]);
+  const [feedback, setFeedback] = useState<FeedbackItem[]>([]);
   const [feedbackDimensions, setFeedbackDimensions] = useState<
     FeedbackDimension[]
   >([]);
   const [experiences, setExperiences] = useState<Experience[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [role, setRole] = useState<"principal" | "admin" | "teacher" | null>(null);
   const [quarterFilter, setQuarterFilter] = useState<string>("all");
   const [experienceTypeFilter, setExperienceTypeFilter] =
     useState<string>("all");
   const [experienceFilter, setExperienceFilter] = useState<string>("all");
   const [dimensionFilter, setDimensionFilter] = useState<string>("all");
 
+  // Fetch user role
+  useEffect(() => {
+    const fetchRole = async () => {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      if (session) {
+        const { data: profile } = await supabase
+          .from("profiles")
+          .select("role")
+          .eq("id", session.user.id)
+          .single();
+        if (profile?.role) {
+          setRole(normalizeRole(profile.role));
+        }
+      }
+    };
+    fetchRole();
+  }, []);
+
   useEffect(() => {
     const fetchData = async () => {
-      if (orgLoading) return;
+      if (orgLoading || !role) return;
 
       // Fetch feedback dimensions and experiences for filters
       try {
@@ -53,30 +79,68 @@ export default function TeacherFeedbackPage() {
         console.error("Error fetching filter data:", err);
       }
 
-      // Fetch teacher feedback from view
+      // Fetch feedback based on user role
       try {
-        const filters: any = {};
-        if (quarterFilter !== "all") {
-          filters.quarter = quarterFilter;
-        }
-        if (experienceTypeFilter !== "all") {
-          filters.experienceType = experienceTypeFilter;
-        }
-        if (experienceFilter !== "all") {
-          filters.experienceId = experienceFilter;
-        }
-        if (dimensionFilter !== "all") {
-          filters.feedbackDimensionId = dimensionFilter;
-        }
+        const isAdmin = role === "admin" || role === "principal";
+        
+        if (isAdmin) {
+          // For admins/principals: use listStudentFeedback with completed status filter
+          const filters: any = {
+            status: "completed", // Only show completed feedback
+          };
+          if (quarterFilter !== "all") {
+            filters.quarter = quarterFilter;
+          }
+          if (experienceFilter !== "all") {
+            filters.experienceId = experienceFilter;
+          }
+          // Note: dimensionFilter and experienceTypeFilter need to be handled differently
+          // since listStudentFeedback doesn't have these exact filters
+          
+          const data = await listStudentFeedback(
+            isSuperAdmin ? null : organizationId || null,
+            filters
+          );
+          
+          // Apply additional filters that aren't supported by the function
+          let filteredData = data;
+          if (dimensionFilter !== "all") {
+            filteredData = filteredData.filter(
+              (item) => item.feedback_dimension_id === dimensionFilter
+            );
+          }
+          if (experienceTypeFilter !== "all") {
+            filteredData = filteredData.filter(
+              (item) => item.experience_type === experienceTypeFilter
+            );
+          }
+          
+          setFeedback(filteredData);
+        } else {
+          // For teachers: use listTeacherFeedbackFromView (existing behavior)
+          const filters: any = {};
+          if (quarterFilter !== "all") {
+            filters.quarter = quarterFilter;
+          }
+          if (experienceTypeFilter !== "all") {
+            filters.experienceType = experienceTypeFilter;
+          }
+          if (experienceFilter !== "all") {
+            filters.experienceId = experienceFilter;
+          }
+          if (dimensionFilter !== "all") {
+            filters.feedbackDimensionId = dimensionFilter;
+          }
 
-        const data = await listTeacherFeedbackFromView(
-          isSuperAdmin ? null : organizationId || null,
-          filters
-        );
-        setFeedback(data);
+          const data = await listTeacherFeedbackFromView(
+            isSuperAdmin ? null : organizationId || null,
+            filters
+          );
+          setFeedback(data);
+        }
         setError(null);
       } catch (err: any) {
-        console.error("Error fetching teacher feedback:", err);
+        console.error("Error fetching feedback:", err);
         setError(err.message || "Failed to load feedback");
       } finally {
         setLoading(false);
@@ -88,6 +152,7 @@ export default function TeacherFeedbackPage() {
     organizationId,
     isSuperAdmin,
     orgLoading,
+    role,
     quarterFilter,
     experienceTypeFilter,
     experienceFilter,
@@ -232,43 +297,50 @@ export default function TeacherFeedbackPage() {
               </tr>
             </thead>
             <tbody>
-              {feedback.map((item) => (
-                <tr key={item.id} className="border-b hover:bg-muted/50">
-                  <td className="px-4 py-3 text-sm font-medium">
-                    {item.feedback_dimension?.dimension_name || (
-                      <span className="text-muted-foreground">—</span>
-                    )}
-                  </td>
-                  <td className="px-4 py-3 text-sm text-muted-foreground">
-                    {item.experience?.name || (
-                      <span className="text-muted-foreground">—</span>
-                    )}
-                  </td>
-                  <td className="px-4 py-3 text-sm text-muted-foreground">
-                    {item.experience_type || (
-                      <span className="text-muted-foreground">—</span>
-                    )}
-                  </td>
-                  <td className="px-4 py-3 text-sm text-muted-foreground">
-                    {item.quarter}
-                  </td>
-                  <td className="px-4 py-3 text-sm">
-                    {item.feedback_text.length > 150
-                      ? item.feedback_text.substring(0, 150) + "..."
-                      : item.feedback_text}
-                  </td>
-                  <td className="px-4 py-3 text-sm">
-                    {item.is_anonymous || !item.student_id ? (
-                      <Badge variant="secondary">Anonymous</Badge>
-                    ) : (
-                      <span className="text-muted-foreground">—</span>
-                    )}
-                  </td>
-                  <td className="px-4 py-3 text-sm text-muted-foreground">
-                    {new Date(item.provided_at).toLocaleDateString()}
-                  </td>
-                </tr>
-              ))}
+              {feedback.map((item) => {
+                // Handle both StudentFeedback and TeacherFeedbackView types
+                // Both types have the same structure for display purposes
+                const feedbackText = item.feedback_text || "";
+                const providedAt = item.provided_at || "";
+                
+                return (
+                  <tr key={item.id} className="border-b hover:bg-muted/50">
+                    <td className="px-4 py-3 text-sm font-medium">
+                      {item.feedback_dimension?.dimension_name || (
+                        <span className="text-muted-foreground">—</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3 text-sm text-muted-foreground">
+                      {item.experience?.name || (
+                        <span className="text-muted-foreground">—</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3 text-sm text-muted-foreground">
+                      {item.experience_type || (
+                        <span className="text-muted-foreground">—</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3 text-sm text-muted-foreground">
+                      {item.quarter}
+                    </td>
+                    <td className="px-4 py-3 text-sm">
+                      {feedbackText.length > 150
+                        ? feedbackText.substring(0, 150) + "..."
+                        : feedbackText}
+                    </td>
+                    <td className="px-4 py-3 text-sm">
+                      {item.is_anonymous || !item.student_id ? (
+                        <Badge variant="secondary">Anonymous</Badge>
+                      ) : (
+                        <span className="text-muted-foreground">—</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3 text-sm text-muted-foreground">
+                      {providedAt ? new Date(providedAt).toLocaleDateString() : "—"}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
