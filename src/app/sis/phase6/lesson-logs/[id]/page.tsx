@@ -17,7 +17,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
-import { ArrowLeft, Edit2, Archive, UserCheck, Plus, Trash2 } from "lucide-react";
+import { ArrowLeft, Edit2, Archive, UserCheck, Plus, Trash2, Calendar, FolderOpen, Eye, BookOpen } from "lucide-react";
 import { useOrganization } from "@/lib/hooks/use-organization";
 import { supabase } from "@/lib/supabase/client";
 import {
@@ -316,6 +316,73 @@ export default function LessonLogDetailPage() {
         </div>
       )}
 
+      {/* Quick Links */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Quick Links</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="flex flex-wrap gap-2">
+            {log.id && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={async () => {
+                  // Find related attendance session
+                  const { data: sessions } = await supabase
+                    .from("attendance_sessions")
+                    .select("id")
+                    .eq("lesson_log_id", log.id)
+                    .is("archived_at", null)
+                    .limit(1);
+                  
+                  if (sessions && sessions.length > 0) {
+                    router.push(`/sis/phase6/attendance/sessions/${sessions[0].id}`);
+                  } else {
+                    // No attendance session found, show message
+                    alert("No related attendance session found for this lesson log.");
+                  }
+                }}
+              >
+                <Calendar className="h-4 w-4 mr-2" />
+                View Related Attendance Session
+              </Button>
+            )}
+            {log.syllabus && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => router.push(`/sis/phase6/syllabus/${log.syllabus!.id}`)}
+              >
+                <BookOpen className="h-4 w-4 mr-2" />
+                View Syllabus
+              </Button>
+            )}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => router.push(`/sis/ams/experiences?lesson_log_id=${log.id}`)}
+            >
+              <Eye className="h-4 w-4 mr-2" />
+              Create Observation (Phase 2)
+            </Button>
+            {verifications.length > 0 && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  const learnerId = verifications[0].learner_id;
+                  router.push(`/sis/phase6/portfolio/my?student=${learnerId}`);
+                }}
+              >
+                <FolderOpen className="h-4 w-4 mr-2" />
+                View Learner Portfolio
+              </Button>
+            )}
+          </div>
+        </CardContent>
+      </Card>
+
       <div className="grid gap-6 md:grid-cols-2">
         <Card>
           <CardHeader>
@@ -523,7 +590,7 @@ export default function LessonLogDetailPage() {
               Verification for {selectedLearnerId && getStudentName(selectedLearnerId)}
             </DialogTitle>
             <DialogDescription>
-              Record whether this learner accomplished the lesson objectives.
+              Verification records teaching evidence. It is not a grade. Record whether this learner accomplished the lesson objectives.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-4">

@@ -12,6 +12,7 @@
  */
 
 import { supabase } from "@/lib/supabase/client";
+import { logError } from "@/lib/logger";
 
 // ============================================================================
 // Types
@@ -634,17 +635,6 @@ export async function archiveEvidenceLink(linkId: string): Promise<void> {
     throw new Error(`Failed to fetch evidence link: ${fetchError?.message || "Link not found"}`);
   }
 
-  // Debug: Log the link details
-  console.log("Archive Evidence Link Debug:", {
-    linkId,
-    userId: context.userId,
-    linkCreatedBy: link.created_by,
-    linkOrgId: link.organization_id,
-    assessmentId: link.assessment_id,
-    isCreator: link.created_by === context.userId,
-    createdByIsNull: link.created_by === null,
-    createdByIsUndefined: link.created_by === undefined,
-  });
 
   // Also check the assessment details
   const { data: assessment, error: assessmentError } = await supabase
@@ -653,17 +643,6 @@ export async function archiveEvidenceLink(linkId: string): Promise<void> {
     .eq("id", link.assessment_id)
     .single();
 
-  console.log("Archive Evidence Link - Assessment Debug:", {
-    assessmentExists: !!assessment,
-    assessmentError: assessmentError?.message,
-    assessmentTeacherId: assessment?.teacher_id,
-    assessmentOrgId: assessment?.organization_id,
-    linkOrgId: link.organization_id,
-    orgMatch: assessment?.organization_id === link.organization_id,
-    isTeacherOwner: assessment?.teacher_id === context.userId,
-    assessmentArchivedAt: assessment?.archived_at,
-    assessmentStatus: assessment?.status,
-  });
 
   // Verify the user is the creator OR check if they own the assessment
   if (link.created_by !== context.userId) {
@@ -682,24 +661,8 @@ export async function archiveEvidenceLink(linkId: string): Promise<void> {
       throw new Error("You can only archive evidence links you created or for assessments you own");
     }
 
-    console.log("Archive allowed: User owns the assessment", {
-      assessmentTeacherId: assessment.teacher_id,
-      userId: context.userId,
-    });
   }
 
-  // Test: Check if we can select the row (RLS check)
-  const { data: testSelect, error: selectError } = await supabase
-    .from("assessment_evidence_links")
-    .select("id, created_by, archived_at")
-    .eq("id", linkId)
-    .single();
-  
-  console.log("RLS Test - Can select row:", {
-    canSelect: !!testSelect,
-    selectError: selectError?.message,
-    currentArchivedAt: testSelect?.archived_at,
-  });
 
   // Update with explicit created_by to ensure it's preserved
   const { error } = await supabase
@@ -712,16 +675,10 @@ export async function archiveEvidenceLink(linkId: string): Promise<void> {
 
   if (error) {
     // Log the full error object to see what we're dealing with
-    console.error("Archive Evidence Link Error - Full Error Object:", error);
-    console.error("Archive Evidence Link Error - Error Stringified:", JSON.stringify(error, null, 2));
-    console.error("Archive Evidence Link Error - Error Properties:", {
-      message: error?.message,
+    logError("Archive Evidence Link Error", error, {
       code: error?.code,
       details: error?.details,
       hint: error?.hint,
-      hasMessage: 'message' in error,
-      hasCode: 'code' in error,
-      errorKeys: Object.keys(error || {}),
     });
     
     const errorMessage = error?.message || error?.toString() || 'Unknown error';

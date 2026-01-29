@@ -122,6 +122,11 @@ export interface AttendanceSession {
     id: string;
     name: string;
   };
+  experience?: {
+    id: string;
+    name: string;
+    experience_type: string | null;
+  };
 }
 
 export interface AttendanceRecord {
@@ -239,7 +244,8 @@ export async function listAttendanceSessions(
     .select(`
       *,
       teacher_profile:profiles!attendance_sessions_teacher_id_fkey(id),
-      syllabus:syllabi(id, name)
+      syllabus:syllabi(id, name),
+      experience:experiences(id, name, experience_type)
     `)
     .is("archived_at", null)
     .order("session_date", { ascending: false });
@@ -288,6 +294,31 @@ export async function listAttendanceSessions(
 /**
  * Get a single attendance session by ID
  */
+/**
+ * Get attendance summary counts for a session
+ */
+export async function getAttendanceSessionSummary(sessionId: string): Promise<{
+  present: number;
+  absent: number;
+  late: number;
+  missing: number;
+  total: number;
+}> {
+  const { data: records } = await supabase
+    .from("attendance_records")
+    .select("status")
+    .eq("session_id", sessionId)
+    .is("archived_at", null);
+
+  const present = records?.filter((r) => r.status === "present").length || 0;
+  const absent = records?.filter((r) => r.status === "absent").length || 0;
+  const late = records?.filter((r) => r.status === "late").length || 0;
+  const total = records?.length || 0;
+
+  // Note: "missing" would require knowing expected learners, which we'll calculate in the UI
+  return { present, absent, late, missing: 0, total };
+}
+
 export async function getAttendanceSession(
   id: string
 ): Promise<AttendanceSession | null> {
@@ -296,7 +327,8 @@ export async function getAttendanceSession(
     .select(`
       *,
       teacher_profile:profiles!attendance_sessions_teacher_id_fkey(id),
-      syllabus:syllabi(id, name)
+      syllabus:syllabi(id, name),
+      experience:experiences(id, name, experience_type)
     `)
     .eq("id", id)
     .is("archived_at", null)

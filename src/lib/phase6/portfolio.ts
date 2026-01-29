@@ -507,7 +507,50 @@ export async function listMyPortfolioArtifacts(
 }
 
 /**
- * Get a single portfolio artifact by ID
+ * Get a single portfolio artifact by ID (for admins - allows access to any artifact in organization)
+ */
+export async function getPortfolioArtifactById(
+  id: string
+): Promise<PortfolioArtifact | null> {
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
+  if (!session) {
+    throw new Error("No active session");
+  }
+
+  const { data, error } = await supabase
+    .from("portfolio_artifacts")
+    .select(`
+      *,
+      student:students!portfolio_artifacts_student_id_fkey(id, first_name, last_name, student_number)
+    `)
+    .eq("id", id)
+    .is("archived_at", null)
+    .single();
+
+  if (error) {
+    if (error.code === "PGRST116") {
+      return null;
+    }
+    throw new Error(`Failed to get portfolio artifact: ${error.message}`);
+  }
+
+  // Parse attachments if they're strings
+  const artifactData = data as any;
+  if (artifactData.attachments && typeof artifactData.attachments === 'string') {
+    try {
+      artifactData.attachments = JSON.parse(artifactData.attachments);
+    } catch {
+      artifactData.attachments = null;
+    }
+  }
+
+  return artifactData as PortfolioArtifact;
+}
+
+/**
+ * Get a single portfolio artifact by ID (for students - only own artifacts)
  */
 export async function getMyPortfolioArtifact(
   id: string

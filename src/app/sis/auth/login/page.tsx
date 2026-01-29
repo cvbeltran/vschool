@@ -54,6 +54,21 @@ function LoginForm() {
             }
             
             if (session) {
+              // Check user role immediately to prevent admin flash for students
+              const { data: profile } = await supabase
+                .from("profiles")
+                .select("role")
+                .eq("id", session.user.id)
+                .single();
+
+              // If student, redirect immediately to student dashboard
+              if (profile?.role === "student") {
+                window.history.replaceState(null, '', window.location.pathname + window.location.search);
+                setCheckingSession(false);
+                router.replace("/student/dashboard");
+                return;
+              }
+
               // Session established - check if this is from an invite
               if (type === "invite") {
                 // Clear the hash and redirect to set password page
@@ -87,7 +102,30 @@ function LoginForm() {
           return;
         }
       } else {
-        // No hash fragment - check for error or message in URL
+        // No hash fragment - check existing session
+        const { data: { session } } = await supabase.auth.getSession();
+        
+        if (session) {
+          // Check if user is a student and redirect immediately
+          const { data: profile } = await supabase
+            .from("profiles")
+            .select("role")
+            .eq("id", session.user.id)
+            .single();
+
+          if (profile?.role === "student") {
+            setCheckingSession(false);
+            router.replace("/student/dashboard");
+            return;
+          }
+
+          // Not a student, redirect to SIS dashboard
+          setCheckingSession(false);
+          router.replace("/sis");
+          return;
+        }
+
+        // No session - check for error or message in URL
         setCheckingSession(false);
         const urlError = searchParams.get("error");
         const urlMessage = searchParams.get("message");
@@ -133,12 +171,12 @@ function LoginForm() {
         return;
       }
 
-      // Check if user has organization_id in profile
+      // Check if user has organization_id in profile and check role
       const { data: { user } } = await supabase.auth.getUser();
       if (user) {
         const { data: profile } = await supabase
           .from("profiles")
-          .select("organization_id")
+          .select("organization_id, role")
           .eq("id", user.id)
           .single();
         
@@ -147,6 +185,13 @@ function LoginForm() {
           setError("Your account is not associated with an organization. Please contact your administrator.");
           await supabase.auth.signOut();
           setLoading(false);
+          return;
+        }
+
+        // CRITICAL: If user is a student, redirect immediately to student dashboard
+        // This prevents showing the admin side in a flash
+        if (profile.role === "student") {
+          router.replace("/student/dashboard");
           return;
         }
       }
@@ -177,6 +222,15 @@ function LoginForm() {
         <div className="space-y-2 text-center">
           <h1 className="text-2xl font-semibold">vSchool · SIS</h1>
           <p className="text-muted-foreground text-sm">Sign in to continue</p>
+          <p className="text-xs text-muted-foreground mt-2">
+            Are you a student?{" "}
+            <a 
+              href="/student/login" 
+              className="text-primary hover:underline font-medium"
+            >
+              Sign in to Student Portal
+            </a>
+          </p>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">
