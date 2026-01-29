@@ -39,6 +39,7 @@ import {
   Clock3,
   Building,
   CalendarClock,
+  CheckCircle2,
 } from "lucide-react";
 import { LucideIcon } from "lucide-react";
 
@@ -426,7 +427,7 @@ export const sidebarConfig: SidebarSection[] = [
         label: "Progress Monitoring",
         href: "/sis/phase6/monitoring/progress",
         icon: BarChart3,
-        allowedRoles: ["principal", "admin"], // registrar normalized to admin, can view
+        allowedRoles: ["principal", "admin", "teacher"], // Teachers see only their own data
       },
       {
         label: "Attendance Sessions",
@@ -470,6 +471,43 @@ export const sidebarConfig: SidebarSection[] = [
         href: "/sis/assessments/label-sets",
         icon: ListChecks,
         allowedRoles: ["principal", "admin"], // admin-only in UI
+      },
+    ],
+  },
+  {
+    label: "Mastery",
+    collapsible: true,
+    defaultCollapsed: false,
+    items: [
+      {
+        label: "Mastery Dashboard",
+        href: "/sis/mastery",
+        icon: Target,
+        allowedRoles: ["principal", "admin", "teacher"],
+      },
+      {
+        label: "Review Students",
+        href: "/sis/mastery/review/students",
+        icon: GraduationCap,
+        allowedRoles: ["principal", "admin", "teacher"],
+      },
+      {
+        label: "Review Queue",
+        href: "/sis/mastery/review/queue",
+        icon: CheckCircle2,
+        allowedRoles: ["principal", "admin"],
+      },
+      {
+        label: "Snapshot Runs",
+        href: "/sis/mastery/runs",
+        icon: TrendingUp,
+        allowedRoles: ["principal", "admin", "teacher"],
+      },
+      {
+        label: "Mastery Setup",
+        href: "/sis/mastery/setup/models",
+        icon: Settings,
+        allowedRoles: ["principal", "admin"],
       },
     ],
   },

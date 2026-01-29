@@ -16,7 +16,7 @@ import {
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
-import { ArrowLeft, Edit2, Archive, CheckCircle2 } from "lucide-react";
+import { ArrowLeft, Edit2, Archive, CheckCircle2, Lock } from "lucide-react";
 import { useOrganization } from "@/lib/hooks/use-organization";
 import { supabase } from "@/lib/supabase/client";
 import {
@@ -24,6 +24,7 @@ import {
   listAttendanceRecords,
   upsertAttendanceRecord,
   archiveAttendanceSession,
+  updateAttendanceSession,
   type AttendanceSession,
   type AttendanceRecord,
 } from "@/lib/phase6/attendance";
@@ -53,6 +54,8 @@ export default function AttendanceSessionDetailPage() {
   const [archiving, setArchiving] = useState(false);
   const [showArchiveDialog, setShowArchiveDialog] = useState(false);
   const [saving, setSaving] = useState<string | null>(null);
+  const [finalizing, setFinalizing] = useState(false);
+  const [isFinalized, setIsFinalized] = useState(false);
 
   useEffect(() => {
     const fetchData = async () => {
@@ -89,6 +92,9 @@ export default function AttendanceSessionDetailPage() {
           return;
         }
         setSession(sessionData);
+        
+        // Check if finalized (description contains [FINALIZED] marker)
+        setIsFinalized(sessionData.description?.includes("[FINALIZED]") || false);
 
         // Check if current user can edit (teacher can only edit their own, registrar cannot edit)
         if (authSession) {
@@ -142,6 +148,8 @@ export default function AttendanceSessionDetailPage() {
   };
 
   const handleStatusChange = async (learnerId: string, status: "present" | "absent" | "late", notes?: string) => {
+    if (isFinalized) return; // Don't allow edits if finalized
+    
     setSaving(learnerId);
     try {
       await upsertAttendanceRecord(id, learnerId, status, notes);
@@ -151,6 +159,56 @@ export default function AttendanceSessionDetailPage() {
     } catch (err: any) {
       console.error("Error updating attendance:", err);
       setError(err.message || "Failed to update attendance");
+    } finally {
+      setSaving(null);
+    }
+  };
+
+  const handleFinalizeSession = async () => {
+    if (!session) return;
+    if (!confirm("Finalize this attendance session? Once finalized, attendance records cannot be edited.")) {
+      return;
+    }
+
+    setFinalizing(true);
+    try {
+      const currentDescription = session.description || "";
+      const finalizedDescription = currentDescription.includes("[FINALIZED]")
+        ? currentDescription
+        : `${currentDescription} [FINALIZED]`.trim();
+      
+      await updateAttendanceSession(id, {
+        description: finalizedDescription,
+      });
+      
+      // Refresh session
+      const sessionData = await getAttendanceSession(id);
+      if (sessionData) {
+        setSession(sessionData);
+        setIsFinalized(true);
+      }
+    } catch (err: any) {
+      console.error("Error finalizing session:", err);
+      setError(err.message || "Failed to finalize session");
+    } finally {
+      setFinalizing(false);
+    }
+  };
+
+  const handleMarkAllPresent = async () => {
+    if (!confirm("Mark all students as present?")) return;
+    setSaving("bulk");
+    try {
+      const promises = students.map((student) =>
+        upsertAttendanceRecord(id, student.id, "present")
+      );
+      await Promise.all(promises);
+      // Refresh records
+      const recordsData = await listAttendanceRecords(id);
+      setRecords(recordsData);
+    } catch (err: any) {
+      console.error("Error marking all present:", err);
+      setError(err.message || "Failed to mark all present");
     } finally {
       setSaving(null);
     }
@@ -233,6 +291,15 @@ export default function AttendanceSessionDetailPage() {
         </div>
       )}
 
+      {isFinalized && (
+        <div className="flex items-center gap-3 p-4 border border-blue-200 bg-blue-50 rounded-md">
+          <Lock className="h-5 w-5 text-blue-600" />
+          <p className="text-blue-800 font-medium">
+            Session finalized — attendance locked. Records cannot be edited.
+          </p>
+        </div>
+      )}
+
       <Card>
         <CardHeader>
           <CardTitle>Session Information</CardTitle>
@@ -274,10 +341,34 @@ export default function AttendanceSessionDetailPage() {
       {canEdit && (
         <Card>
           <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <CheckCircle2 className="h-5 w-5" />
-              Mark Attendance
-            </CardTitle>
+            <div className="flex items-center justify-between">
+              <CardTitle className="flex items-center gap-2">
+                <CheckCircle2 className="h-5 w-5" />
+                Mark Attendance
+              </CardTitle>
+              <div className="flex gap-2">
+                {students.length > 0 && !isFinalized && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleMarkAllPresent}
+                    disabled={saving === "bulk"}
+                  >
+                    {saving === "bulk" ? "Saving..." : "Mark All Present"}
+                  </Button>
+                )}
+                {!isFinalized && (
+                  <Button
+                    variant="default"
+                    size="sm"
+                    onClick={handleFinalizeSession}
+                    disabled={finalizing}
+                  >
+                    {finalizing ? "Finalizing..." : "Finalize Session"}
+                  </Button>
+                )}
+              </div>
+            </div>
           </CardHeader>
           <CardContent>
             {students.length === 0 ? (
@@ -308,29 +399,37 @@ export default function AttendanceSessionDetailPage() {
                         )}
                       </div>
                       <div className="flex items-center gap-2">
-                        <Select
-                          value={currentStatus}
-                          onValueChange={(value: "present" | "absent" | "late") =>
-                            handleStatusChange(student.id, value, record?.notes || undefined)
-                          }
-                          disabled={isSaving}
-                        >
-                          <SelectTrigger className="w-32">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="present">Present</SelectItem>
-                            <SelectItem value="absent">Absent</SelectItem>
-                            <SelectItem value="late">Late</SelectItem>
-                          </SelectContent>
-                        </Select>
-                        {isSaving && (
-                          <span className="text-xs text-muted-foreground">Saving...</span>
-                        )}
-                        {record && !isSaving && (
-                          <Badge variant={getStatusBadgeVariant(record.status)}>
-                            {record.status}
+                        {isFinalized ? (
+                          <Badge variant={getStatusBadgeVariant(currentStatus)}>
+                            {currentStatus}
                           </Badge>
+                        ) : (
+                          <>
+                            <Select
+                              value={currentStatus}
+                              onValueChange={(value: "present" | "absent" | "late") =>
+                                handleStatusChange(student.id, value, record?.notes || undefined)
+                              }
+                              disabled={isSaving || isFinalized}
+                            >
+                              <SelectTrigger className="w-32">
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="present">Present</SelectItem>
+                                <SelectItem value="absent">Absent</SelectItem>
+                                <SelectItem value="late">Late</SelectItem>
+                              </SelectContent>
+                            </Select>
+                            {isSaving && (
+                              <span className="text-xs text-muted-foreground">Saving...</span>
+                            )}
+                            {record && !isSaving && (
+                              <Badge variant={getStatusBadgeVariant(record.status)}>
+                                {record.status}
+                              </Badge>
+                            )}
+                          </>
                         )}
                       </div>
                     </div>

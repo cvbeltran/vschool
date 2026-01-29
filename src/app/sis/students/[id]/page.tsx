@@ -24,6 +24,7 @@ import { fetchMultipleTaxonomies, getSmartDefault, type TaxonomyItem, type Taxon
 import { STUDENT_COLUMNS, TAXONOMY_KEYS } from "@/lib/constants/student-columns";
 import { useOrganization } from "@/lib/hooks/use-organization";
 import { ToastContainer, type Toast } from "@/components/ui/toast";
+import { logError } from "@/lib/logger";
 
 interface Student {
   id: string;
@@ -59,6 +60,11 @@ interface Student {
   first_name?: string | null;
   last_name?: string | null;
   email?: string | null;
+  // Account management fields
+  profile_id?: string | null;
+  must_reset_password?: boolean | null;
+  invited_at?: string | null;
+  last_login_at?: string | null;
 }
 
 interface School {
@@ -150,6 +156,19 @@ export default function StudentDetailPage() {
     setToasts((prev) => prev.filter((toast) => toast.id !== id));
   };
 
+  // Account management state
+  const [inviteEmail, setInviteEmail] = useState("");
+  const [inviting, setInviting] = useState(false);
+  const [accountError, setAccountError] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
+
+  // Initialize inviteEmail with student's primary_email if available
+  useEffect(() => {
+    if (student && !student.profile_id && student.primary_email) {
+      setInviteEmail(student.primary_email);
+    }
+  }, [student]);
+
   // Tab change handler: update URL without full reload
   const handleTabChange = (value: string) => {
     setActiveTab(value);
@@ -198,14 +217,6 @@ export default function StudentDetailPage() {
       setLanguageOptions(languageResult.items);
       defaults.set("language", languageResult.hasSystemDefaults);
       
-      // DEV DEBUG: Log taxonomy options (remove after verification)
-      if (process.env.NODE_ENV === 'development') {
-        console.log('[DEV] Language options loaded:', {
-          count: languageResult.items.length,
-          ids: languageResult.items.map(item => item.id),
-          labels: languageResult.items.map(item => item.label),
-        });
-      }
     }
     
     const economicResult = results.get("economic_status");
@@ -213,14 +224,6 @@ export default function StudentDetailPage() {
       setEconomicStatusOptions(economicResult.items);
       defaults.set("economic_status", economicResult.hasSystemDefaults);
       
-      // DEV DEBUG: Log taxonomy options (remove after verification)
-      if (process.env.NODE_ENV === 'development') {
-        console.log('[DEV] Economic status options loaded:', {
-          count: economicResult.items.length,
-          ids: economicResult.items.map(item => item.id),
-          labels: economicResult.items.map(item => item.label),
-        });
-      }
     }
 
     const relationshipResult = results.get("guardian_relationship");
@@ -291,7 +294,7 @@ export default function StudentDetailPage() {
         }
       } catch (authError) {
         // Catch any unexpected auth errors
-        console.error("Auth error:", authError);
+        logError("Auth error in student detail page", authError);
         setRole("teacher"); // Default to read-only
       }
 
@@ -343,16 +346,19 @@ export default function StudentDetailPage() {
           created_at,
           first_name,
           last_name,
-          email
+          email,
+          profile_id,
+          must_reset_password,
+          invited_at,
+          last_login_at
         `)
         .eq("id", studentId)
         .single();
 
       if (studentError) {
         // Log detailed error information for debugging
-        console.error("Error fetching student:", {
+        logError("Error fetching student", studentError, {
           code: studentError.code,
-          message: studentError.message,
           details: studentError.details,
           hint: studentError.hint,
           studentId: studentId,
@@ -497,16 +503,6 @@ export default function StudentDetailPage() {
         };
         setStudent(normalizedStudent);
         
-        // DEV DEBUG: Log fetched student data (remove after verification)
-        if (process.env.NODE_ENV === 'development') {
-          console.log('[DEV] Fetched student:', {
-            id: normalizedStudent.id,
-            sex_id: normalizedStudent.sex_id,
-            economic_status_id: normalizedStudent.economic_status_id,
-            primary_language_id: normalizedStudent.primary_language_id,
-            guardian_relationship_id: normalizedStudent.guardian_relationship_id,
-          });
-        }
         
         // ONE-TIME HYDRATION GUARD: Only initialize formData once per studentId
         // However, always refresh formData on page load/refresh to ensure correct values are displayed
@@ -521,10 +517,6 @@ export default function StudentDetailPage() {
           // economic_status_id: Preserve fetched value (null or UUID string)
         };
         
-        // DEV DEBUG: Log formData initialization
-        if (process.env.NODE_ENV === 'development') {
-          console.log('[DEV] Initializing/Refreshing formData:', {
-            shouldInitialize,
             sex_id: defaultedStudent.sex_id,
             economic_status_id: defaultedStudent.economic_status_id,
             primary_language_id: defaultedStudent.primary_language_id,
@@ -706,7 +698,7 @@ export default function StudentDetailPage() {
         .limit(1);
 
       if (fetchError) {
-        console.error("Error fetching existing student numbers:", fetchError);
+        logError("Error fetching existing student numbers", fetchError);
         // Fallback: generate based on timestamp if fetch fails
         const timestamp = Date.now().toString().slice(-6);
         const generatedNumber = `${currentYear}-${timestamp}`;
@@ -742,12 +734,199 @@ export default function StudentDetailPage() {
         setFormData({ ...formData, student_number: generatedNumber });
       }
     } catch (error) {
-      console.error("Error generating student number:", error);
+      logError("Error generating student number", error);
       // Fallback: generate based on timestamp
       const currentYear = new Date().getFullYear();
       const timestamp = Date.now().toString().slice(-6);
       const generatedNumber = `${currentYear}-${timestamp}`;
       setFormData({ ...formData, student_number: generatedNumber });
+    }
+  };
+
+  const handleSendInvite = async () => {
+    if (!inviteEmail || !canEdit) return;
+
+    setInviting(true);
+    setAccountError(null);
+    setSuccessMessage(null);
+
+    try {
+      // Get auth token for API call
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        setAccountError("You must be logged in to perform this action");
+        setInviting(false);
+        return;
+      }
+
+      const response = await fetch("/api/student/invite", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({
+          studentId: studentId,
+          email: inviteEmail,
+        }),
+      });
+
+      const result = await response.json();
+
+      if (!response.ok) {
+        setAccountError(result.error || "Failed to send invitation");
+        setInviting(false);
+        return;
+      }
+
+      // Show success message
+      setSuccessMessage(result.message || "Invitation email sent successfully");
+
+      // Refresh student data
+      await fetchStudent();
+      setInviteEmail("");
+      showToast(result.message || "Invitation email sent successfully");
+    } catch (err: any) {
+      setAccountError(err.message || "An error occurred");
+    } finally {
+      setInviting(false);
+    }
+  };
+
+  const handleResendInvite = async () => {
+    if (!student?.primary_email || !canEdit) return;
+
+    setInviting(true);
+    setAccountError(null);
+    setSuccessMessage(null);
+
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        setAccountError("You must be logged in to perform this action");
+        setInviting(false);
+        return;
+      }
+
+      const response = await fetch("/api/student/invite", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({
+          studentId: studentId,
+          email: student.primary_email,
+        }),
+      });
+
+      const result = await response.json();
+
+      if (!response.ok) {
+        setAccountError(result.error || "Failed to resend invite");
+        setInviting(false);
+        return;
+      }
+
+      // Show success message
+      setSuccessMessage(result.message || "Invitation email resent successfully");
+
+      // Refresh student data
+      await fetchStudent();
+      showToast(result.message || "Invitation email resent successfully");
+    } catch (err: any) {
+      setAccountError(err.message || "An error occurred");
+    } finally {
+      setInviting(false);
+    }
+  };
+
+  const handleForcePasswordReset = async () => {
+    if (!student?.profile_id || !canEdit) return;
+
+    setInviting(true);
+    setAccountError(null);
+
+    try {
+      const { error: updateError } = await supabase
+        .from("students")
+        .update({ must_reset_password: true })
+        .eq("id", studentId);
+
+      if (updateError) {
+        setAccountError(updateError.message || "Failed to force password reset");
+        setInviting(false);
+        return;
+      }
+
+      // Refresh student data
+      await fetchStudent();
+      showToast("Password reset required flag set");
+    } catch (err: any) {
+      setAccountError(err.message || "An error occurred");
+    } finally {
+      setInviting(false);
+    }
+  };
+
+  const fetchStudent = async () => {
+    const { data: studentData } = await supabase
+      .from("students")
+      .select(`
+        id,
+        organization_id,
+        legal_first_name,
+        legal_last_name,
+        preferred_name,
+        date_of_birth,
+        sex_id,
+        nationality,
+        student_number,
+        student_lrn,
+        status,
+        primary_email,
+        phone,
+        address,
+        emergency_contact_name,
+        emergency_contact_phone,
+        guardian_name,
+        guardian_relationship_id,
+        guardian_email,
+        guardian_phone,
+        consent_flags,
+        economic_status_id,
+        primary_language_id,
+        special_needs_flag,
+        previous_school,
+        entry_type,
+        notes,
+        admission_id,
+        created_at,
+        first_name,
+        last_name,
+        email,
+        profile_id,
+        must_reset_password,
+        invited_at,
+        last_login_at
+      `)
+      .eq("id", studentId)
+      .single();
+
+    if (studentData) {
+      const normalizedStudent: Student = {
+        ...studentData,
+        legal_first_name: studentData.legal_first_name || studentData.first_name,
+        legal_last_name: studentData.legal_last_name || studentData.last_name,
+        primary_email: studentData.primary_email || studentData.email,
+        sex_id: studentData.sex_id ? String(studentData.sex_id).trim() : null,
+        economic_status_id: studentData.economic_status_id ? String(studentData.economic_status_id).trim() : null,
+        primary_language_id: studentData.primary_language_id ? String(studentData.primary_language_id).trim() : null,
+        guardian_relationship_id: studentData.guardian_relationship_id ? String(studentData.guardian_relationship_id).trim() : null,
+        status: studentData.status ? String(studentData.status).trim() : null,
+        entry_type: studentData.entry_type ? String(studentData.entry_type).trim() : null,
+      };
+      setStudent(normalizedStudent);
     }
   };
 
@@ -864,7 +1043,7 @@ export default function StudentDetailPage() {
             .eq("id", guardianId);
 
           if (updateGuardianError) {
-            console.error("Error updating guardian:", updateGuardianError);
+            logError("Error updating guardian", updateGuardianError);
             setError(updateGuardianError.message || "Failed to update guardian.");
             setSaving(false);
             return;
@@ -884,7 +1063,7 @@ export default function StudentDetailPage() {
             .eq("id", existingRelationshipId);
 
           if (updateRelError) {
-            console.error("Error updating student_guardian relationship:", updateRelError);
+            logError("Error updating student_guardian relationship", updateRelError);
             setError(updateRelError.message || "Failed to update guardian relationship.");
             setSaving(false);
             return;
@@ -970,7 +1149,7 @@ export default function StudentDetailPage() {
               .single();
 
             if (createGuardianError) {
-              console.error("Error creating guardian:", createGuardianError);
+              logError("Error creating guardian", createGuardianError);
               setError(createGuardianError.message || "Failed to create guardian.");
               setSaving(false);
               return;
@@ -995,7 +1174,7 @@ export default function StudentDetailPage() {
             });
 
           if (createRelError) {
-            console.error("Error creating student_guardian relationship:", createRelError);
+            logError("Error creating student_guardian relationship", createRelError);
             setError(createRelError.message || "Failed to link guardian to student.");
             setSaving(false);
             return;
@@ -1010,7 +1189,7 @@ export default function StudentDetailPage() {
           .eq("is_primary", true);
 
         if (deleteRelError) {
-          console.error("Error removing guardian relationship:", deleteRelError);
+          logError("Error removing guardian relationship", deleteRelError);
           // Don't fail the save if removal fails, just log it
         }
       }
@@ -1144,8 +1323,7 @@ export default function StudentDetailPage() {
       .eq("id", studentId);
 
     if (updateError) {
-      console.error("Error updating student:", updateError);
-      console.error("Update payload:", updatePayload);
+      logError("Error updating student", updateError, { updatePayload });
       const errorMessage = updateError.message || updateError.details || JSON.stringify(updateError) || "Failed to save changes.";
       setError(errorMessage);
       setSaving(false);
@@ -1450,6 +1628,126 @@ export default function StudentDetailPage() {
                     Enrollment details are derived from the admission record. To modify enrollment, update the admission record.
                   </div>
                 </div>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Account Management Card */}
+          <Card>
+            <CardHeader>
+              <CardTitle>Account Management</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {student?.profile_id ? (
+                <>
+                  <div className="space-y-2">
+                    <div className="text-sm text-muted-foreground">Account Status</div>
+                    <div className="flex items-center gap-2">
+                      {student.must_reset_password ? (
+                        <Badge className="bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200">Invited (reset required)</Badge>
+                      ) : (
+                        <Badge className="bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200">Active</Badge>
+                      )}
+                    </div>
+                  </div>
+                  {student.primary_email && (
+                    <div>
+                      <div className="text-sm text-muted-foreground mb-1">Email</div>
+                      <div className="text-lg">{student.primary_email}</div>
+                    </div>
+                  )}
+                  {student.invited_at && (
+                    <div>
+                      <div className="text-sm text-muted-foreground mb-1">Invited At</div>
+                      <div className="text-lg">{formatDate(student.invited_at)}</div>
+                    </div>
+                  )}
+                  {student.last_login_at && (
+                    <div>
+                      <div className="text-sm text-muted-foreground mb-1">Last Login</div>
+                      <div className="text-lg">{formatDate(student.last_login_at)}</div>
+                    </div>
+                  )}
+                  <div className="flex gap-2 pt-2">
+                    <Button
+                      variant="outline"
+                      onClick={handleResendInvite}
+                      disabled={inviting || !canEdit}
+                    >
+                      {inviting ? (
+                        <>
+                          <Loader2 className="size-4 mr-2 animate-spin" />
+                          Sending...
+                        </>
+                      ) : (
+                        "Resend Invite"
+                      )}
+                    </Button>
+                    <Button
+                      variant="outline"
+                      onClick={handleForcePasswordReset}
+                      disabled={inviting || !canEdit}
+                    >
+                      Force Password Reset
+                    </Button>
+                  </div>
+                  {successMessage && (
+                    <div className="rounded-md bg-green-50 dark:bg-green-950 border border-green-200 dark:border-green-800 p-3">
+                      <div className="text-sm text-green-800 dark:text-green-200">
+                        {successMessage}
+                      </div>
+                    </div>
+                  )}
+                  {accountError && (
+                    <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">
+                      {accountError}
+                    </div>
+                  )}
+                </>
+              ) : (
+                <>
+                  <div className="text-sm text-muted-foreground mb-4">
+                    No account created yet. Create an account to enable student portal login.
+                  </div>
+                  <div className="space-y-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="invite-email">Email</Label>
+                      <Input
+                        id="invite-email"
+                        type="email"
+                        placeholder="student@example.com"
+                        value={inviteEmail}
+                        onChange={(e) => setInviteEmail(e.target.value)}
+                        disabled={inviting || !canEdit}
+                      />
+                    </div>
+                    {successMessage && (
+                      <div className="rounded-md bg-green-50 dark:bg-green-950 border border-green-200 dark:border-green-800 p-3">
+                        <div className="text-sm text-green-800 dark:text-green-200">
+                          {successMessage}
+                        </div>
+                      </div>
+                    )}
+                    {accountError && (
+                      <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">
+                        {accountError}
+                      </div>
+                    )}
+                    <Button
+                      onClick={handleSendInvite}
+                      disabled={inviting || !canEdit || !inviteEmail}
+                    >
+                      {inviting ? (
+                        <>
+                          <Loader2 className="size-4 mr-2 animate-spin" />
+                          Sending invite...
+                        </>
+                      ) : (
+                        "Send Invite"
+                      )}
+                    </Button>
+                  </div>
+                </>
               )}
             </CardContent>
           </Card>
@@ -1865,13 +2163,6 @@ export default function StudentDetailPage() {
                 <Select
                   value={formData.economic_status_id ? String(formData.economic_status_id).trim() : ""}
                   onValueChange={(value) => {
-                    // DEV DEBUG: Log Select value change
-                    if (process.env.NODE_ENV === 'development') {
-                      console.log('[DEV] Economic status Select onChange:', {
-                        newValue: value,
-                        formDataValue: formData.economic_status_id,
-                      });
-                    }
                     setFormData({ ...formData, economic_status_id: value ? value.trim() : null });
                   }}
                   disabled={!canEdit || isWithdrawn() || isLegacy()}
@@ -1891,25 +2182,12 @@ export default function StudentDetailPage() {
                     )}
                   </SelectContent>
                 </Select>
-                {/* DEV DEBUG: Log Select render state */}
-                {process.env.NODE_ENV === 'development' && (
-                  <div className="text-xs text-muted-foreground mt-1">
-                    [DEV] Select value: {formData.economic_status_id || 'null'} | Options: {economicStatusOptions.length}
-                  </div>
-                )}
               </div>
               <div className="space-y-2">
                 <Label htmlFor="primary_language_id">Primary Language</Label>
                 <Select
                   value={formData.primary_language_id ? String(formData.primary_language_id).trim() : ""}
                   onValueChange={(value) => {
-                    // DEV DEBUG: Log Select value change
-                    if (process.env.NODE_ENV === 'development') {
-                      console.log('[DEV] Primary language Select onChange:', {
-                        newValue: value,
-                        formDataValue: formData.primary_language_id,
-                      });
-                    }
                     setFormData({ ...formData, primary_language_id: value ? value.trim() : null });
                   }}
                   disabled={!canEdit || isWithdrawn() || isLegacy()}
@@ -1929,12 +2207,6 @@ export default function StudentDetailPage() {
                     )}
                   </SelectContent>
                 </Select>
-                {/* DEV DEBUG: Log Select render state */}
-                {process.env.NODE_ENV === 'development' && (
-                  <div className="text-xs text-muted-foreground mt-1">
-                    [DEV] Select value: {formData.primary_language_id || 'null'} | Options: {languageOptions.length}
-                  </div>
-                )}
                 {taxonomyDefaults.has("language") && taxonomyDefaults.get("language") && (
                   <p className="text-xs text-muted-foreground">
                     Using system defaults. You can customize this later in Settings → Taxonomies.

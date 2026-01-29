@@ -14,7 +14,7 @@
  * - RBAC checks are scoped to the user's organization context
  */
 
-export type Role = "principal" | "admin" | "registrar" | "teacher";
+export type Role = "principal" | "admin" | "registrar" | "teacher" | "student";
 
 /**
  * Check if a user is a super admin
@@ -27,9 +27,10 @@ export function isSuperAdmin(isSuperAdmin: boolean | null | undefined): boolean 
 }
 
 // Normalize role (registrar = admin for navigation, but differentiated in canPerform)
-export function normalizeRole(role: string | null): "principal" | "admin" | "teacher" {
+export function normalizeRole(role: string | null): "principal" | "admin" | "teacher" | "student" {
   if (role === "principal") return "principal";
   if (role === "teacher") return "teacher";
+  if (role === "student") return "student";
   return "admin"; // admin, registrar, or any other role
 }
 
@@ -210,6 +211,14 @@ export function canPerform(
     if (["ams_experiences", "ams_observations"].includes(resource)) {
       return action === "create" || action === "update" || action === "delete";
     }
+  }
+  
+  // Student: Read-only access to their own student portal
+  if (role === "student") {
+    // Students have read-only access to their own records
+    // They cannot perform any create/update/delete actions
+    // Access is controlled via RLS policies (students can only see their own row)
+    return false; // No admin actions allowed
   }
   
   return false;

@@ -63,6 +63,12 @@ export default function SISLayout({
         return;
       }
 
+      // CRITICAL: Block students from accessing SIS routes
+      if (profile.role === "student") {
+        router.push("/student/dashboard");
+        return;
+      }
+
       // Normalize role (registrar = admin)
       const normalizedRole = normalizeRole(profile.role);
       setRole(normalizedRole as "principal" | "admin" | "teacher");

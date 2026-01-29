@@ -23,7 +23,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { Plus, Edit, Archive, Search, X, Tag, Link as LinkIcon, FileText, Upload } from "lucide-react";
+import { Plus, Edit, Archive, Search, X, Tag, Link as LinkIcon, FileText, Upload, Eye, Loader2 } from "lucide-react";
+import { uploadPortfolioFileForStudent, isImageFile, getFileNameFromUrl } from "@/lib/student/file-upload";
 import { useOrganization } from "@/lib/hooks/use-organization";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import {
@@ -85,6 +86,9 @@ export default function PortfolioPage() {
     attachments: [],
   });
   const [saving, setSaving] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [uploadedFileName, setUploadedFileName] = useState<string>("");
 
   // Tagging dialog
   const [tagDialogOpen, setTagDialogOpen] = useState(false);
@@ -133,7 +137,6 @@ export default function PortfolioPage() {
           const normalizedRole = normalizeRole(profile.role);
           setRole(normalizedRole);
           setOriginalRole(profile.role);
-          console.log("Role fetched:", { original: profile.role, normalized: normalizedRole });
         } else {
           console.warn("No role found in profile");
         }
@@ -181,7 +184,6 @@ export default function PortfolioPage() {
 
   // Update URL when student is selected
   const handleStudentSelect = (studentId: string | null) => {
-    console.log("handleStudentSelect called with:", studentId);
     setSelectedStudentId(studentId);
     // Clear search when selecting
     if (studentId) {
@@ -243,18 +245,6 @@ export default function PortfolioPage() {
 
   const canManage = role === "admin" || role === "principal" || role === "teacher";
   
-  // Debug: Log role and selectedStudentId to help troubleshoot
-  useEffect(() => {
-    if (selectedStudentId) {
-      console.log("Operations Portfolio Debug:", { 
-        role, 
-        selectedStudentId, 
-        canManage, 
-        organizationId,
-        roleLoaded: role !== null 
-      });
-    }
-  }, [role, selectedStudentId, canManage, organizationId]);
 
   // If we have selectedStudentId but student not in array, fetch it
   // MUST be before any early returns
@@ -293,6 +283,12 @@ export default function PortfolioPage() {
         evidence_type: artifact.evidence_type || "",
         attachments: artifact.attachments || [],
       });
+      if (artifact.file_url) {
+        setUploadedFileName(getFileNameFromUrl(artifact.file_url));
+      } else {
+        setUploadedFileName("");
+      }
+      setSelectedFile(null);
     } else {
       setEditingArtifact(null);
       setFormData({
@@ -306,6 +302,8 @@ export default function PortfolioPage() {
         evidence_type: "",
         attachments: [],
       });
+      setSelectedFile(null);
+      setUploadedFileName("");
     }
     setDialogOpen(true);
   };
@@ -764,7 +762,16 @@ export default function PortfolioPage() {
                       <Button
                         variant="ghost"
                         size="sm"
+                        onClick={() => router.push(`/sis/operations/portfolio/${artifact.id}?student=${selectedStudentId}`)}
+                        title="View details"
+                      >
+                        <Eye className="h-4 w-4" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
                         onClick={() => handleOpenTagDialog(artifact)}
+                        title="Manage tags"
                       >
                         <Tag className="h-4 w-4" />
                       </Button>
@@ -772,6 +779,7 @@ export default function PortfolioPage() {
                         variant="ghost"
                         size="sm"
                         onClick={() => handleOpenDialog(artifact)}
+                        title="Edit artifact"
                       >
                         <Edit className="h-4 w-4" />
                       </Button>
@@ -779,6 +787,7 @@ export default function PortfolioPage() {
                         variant="ghost"
                         size="sm"
                         onClick={() => handleArchive(artifact)}
+                        title="Archive artifact"
                       >
                         <Archive className="h-4 w-4" />
                       </Button>
@@ -809,9 +818,18 @@ export default function PortfolioPage() {
               <Label htmlFor="artifact_type">Type *</Label>
               <Select
                 value={formData.artifact_type || "text"}
-                onValueChange={(value: any) =>
-                  setFormData({ ...formData, artifact_type: value })
-                }
+                onValueChange={(value: any) => {
+                  setFormData({ 
+                    ...formData, 
+                    artifact_type: value,
+                    file_url: value === "text" ? "" : formData.file_url,
+                    text_content: value === "text" ? formData.text_content : "",
+                  });
+                  if (value !== "upload") {
+                    setSelectedFile(null);
+                    setUploadedFileName("");
+                  }
+                }}
               >
                 <SelectTrigger>
                   <SelectValue />
@@ -849,15 +867,140 @@ export default function PortfolioPage() {
             </div>
             {formData.artifact_type === "upload" && (
               <div className="space-y-2">
-                <Label htmlFor="file_url">File URL</Label>
-                <Input
-                  id="file_url"
-                  value={formData.file_url || ""}
-                  onChange={(e) =>
-                    setFormData({ ...formData, file_url: e.target.value })
-                  }
-                  placeholder="https://..."
-                />
+                <Label htmlFor="fileUpload">Upload File</Label>
+                {!formData.file_url ? (
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-2">
+                      <Input
+                        id="fileUpload"
+                        type="file"
+                        onChange={async (e) => {
+                          const file = e.target.files?.[0];
+                          if (!file) return;
+
+                          if (!selectedStudentId || !organizationId) {
+                            alert("Please select a student first");
+                            return;
+                          }
+
+                          setSelectedFile(file);
+                          setUploading(true);
+
+                          try {
+                            const result = await uploadPortfolioFileForStudent(
+                              file,
+                              selectedStudentId,
+                              organizationId
+                            );
+                            if (result.error) {
+                              alert(result.error);
+                              setSelectedFile(null);
+                              return;
+                            }
+
+                            setFormData({ ...formData, file_url: result.url });
+                            setUploadedFileName(file.name);
+                          } catch (err: any) {
+                            console.error("Error uploading file:", err);
+                            alert(err.message || "Failed to upload file");
+                            setSelectedFile(null);
+                          } finally {
+                            setUploading(false);
+                          }
+                        }}
+                        disabled={uploading || saving || !selectedStudentId}
+                        className="cursor-pointer"
+                        accept="image/*,application/pdf,.doc,.docx,.txt"
+                      />
+                      {uploading && (
+                        <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                      )}
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      Upload an image, PDF, or document file (max size: 10MB)
+                      {!selectedStudentId && " - Please select a student first"}
+                    </p>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between p-3 border rounded-md bg-muted/50">
+                      <div className="flex items-center gap-2 flex-1 min-w-0">
+                        <Upload className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+                        <span className="text-sm truncate" title={uploadedFileName || getFileNameFromUrl(formData.file_url || "")}>
+                          {uploadedFileName || getFileNameFromUrl(formData.file_url || "")}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Input
+                          id="fileUploadReplace"
+                          type="file"
+                          onChange={async (e) => {
+                            const file = e.target.files?.[0];
+                            if (!file) return;
+
+                            if (!selectedStudentId || !organizationId) {
+                              alert("Please select a student first");
+                              return;
+                            }
+
+                            setSelectedFile(file);
+                            setUploading(true);
+
+                            try {
+                              const result = await uploadPortfolioFileForStudent(
+                                file,
+                                selectedStudentId,
+                                organizationId
+                              );
+                              if (result.error) {
+                                alert(result.error);
+                                setSelectedFile(null);
+                                return;
+                              }
+
+                              setFormData({ ...formData, file_url: result.url });
+                              setUploadedFileName(file.name);
+                            } catch (err: any) {
+                              console.error("Error uploading file:", err);
+                              alert(err.message || "Failed to upload file");
+                              setSelectedFile(null);
+                            } finally {
+                              setUploading(false);
+                            }
+                          }}
+                          disabled={uploading || saving || !selectedStudentId}
+                          className="cursor-pointer w-auto"
+                          accept="image/*,application/pdf,.doc,.docx,.txt"
+                        />
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => {
+                            setFormData({ ...formData, file_url: "" });
+                            setSelectedFile(null);
+                            setUploadedFileName("");
+                          }}
+                          disabled={uploading || saving}
+                        >
+                          <X className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    </div>
+                    {formData.file_url && isImageFile(formData.file_url) && (
+                      <div className="mt-2">
+                        <img
+                          src={formData.file_url}
+                          alt="Preview"
+                          className="max-w-full max-h-64 rounded-md border"
+                          onError={(e) => {
+                            (e.target as HTMLImageElement).style.display = "none";
+                          }}
+                        />
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             )}
             {formData.artifact_type === "link" && (

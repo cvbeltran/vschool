@@ -56,8 +56,36 @@ function HomeContent() {
       }
     }
 
-    // No auth parameters - redirect to login
-    router.push('/sis/auth/login');
+    // No auth parameters - check if user is logged in and redirect based on role
+    const checkUserAndRedirect = async () => {
+      try {
+        const { supabase } = await import('@/lib/supabase/client');
+        
+        const { data: { session } } = await supabase.auth.getSession();
+        if (session) {
+          const { data: profile } = await supabase
+            .from("profiles")
+            .select("role")
+            .eq("id", session.user.id)
+            .single();
+          
+          if (profile?.role === "student") {
+            router.push('/student/dashboard');
+            return;
+          } else {
+            router.push('/sis');
+            return;
+          }
+        }
+      } catch (err) {
+        console.error("Error checking user:", err);
+      }
+      
+      // Default: redirect to SIS login
+      router.push('/sis/auth/login');
+    };
+    
+    checkUserAndRedirect();
   }, [router, searchParams]);
 
   return (
