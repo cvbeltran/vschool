@@ -78,12 +78,43 @@ export async function GET(request: NextRequest) {
     // Debug: Also return some diagnostic info in development
     let debugInfo: any = null;
     if (process.env.NODE_ENV === "development") {
-      // Check what assessments exist (any status)
+      // Check what assessments exist (any status) using service role (bypasses RLS)
       const { data: allAssessments } = await supabaseServer
         .from("assessments")
-        .select("id, status, learner_id")
+        .select("id, status, learner_id, organization_id")
         .eq("learner_id", learnerId)
         .is("archived_at", null);
+      
+      // Check what assessments the user client can see (with RLS)
+      const { data: userAssessments, error: userAssessmentsError } = await userSupabase
+        .from("assessments")
+        .select("id, status, learner_id, organization_id")
+        .eq("learner_id", learnerId)
+        .is("archived_at", null);
+      
+      // Check confirmed assessments with user client (what getEvidencePack uses)
+      const { data: confirmedAssessments, error: confirmedError } = await userSupabase
+        .from("assessments")
+        .select("id, status, learner_id, organization_id")
+        .eq("learner_id", learnerId)
+        .eq("status", "confirmed")
+        .is("archived_at", null);
+      
+      if (profile.organization_id) {
+        // Also check with organization filter
+        const { data: orgConfirmedAssessments } = await userSupabase
+          .from("assessments")
+          .select("id, status, learner_id, organization_id")
+          .eq("learner_id", learnerId)
+          .eq("status", "confirmed")
+          .eq("organization_id", profile.organization_id)
+          .is("archived_at", null);
+        
+        console.log(`[evidence-pack API] Confirmed assessments with org filter:`, {
+          count: orgConfirmedAssessments?.length || 0,
+          assessments: orgConfirmedAssessments
+        });
+      }
       
       // Check what portfolio artifacts exist
       const { data: allArtifacts } = await supabaseServer
@@ -91,6 +122,22 @@ export async function GET(request: NextRequest) {
         .select("id, student_id")
         .eq("student_id", learnerId)
         .is("archived_at", null);
+      
+      console.log(`[evidence-pack API] Assessment visibility check:`, {
+        serviceRoleTotal: allAssessments?.length || 0,
+        userClientTotal: userAssessments?.length || 0,
+        userClientConfirmed: confirmedAssessments?.length || 0,
+        userClientError: userAssessmentsError,
+        confirmedError: confirmedError,
+        serviceRoleStatuses: allAssessments?.reduce((acc: any, a: any) => {
+          acc[a.status] = (acc[a.status] || 0) + 1;
+          return acc;
+        }, {}),
+        userClientStatuses: userAssessments?.reduce((acc: any, a: any) => {
+          acc[a.status] = (acc[a.status] || 0) + 1;
+          return acc;
+        }, {}),
+      });
       
       debugInfo = {
         learnerId,
@@ -104,6 +151,17 @@ export async function GET(request: NextRequest) {
         assessments: {
           total: allAssessments?.length || 0,
           byStatus: allAssessments?.reduce((acc: any, a: any) => {
+            acc[a.status] = (acc[a.status] || 0) + 1;
+            return acc;
+          }, {}) || {},
+          serviceRoleDetails: allAssessments?.map((a: any) => ({
+            id: a.id,
+            status: a.status,
+            organization_id: a.organization_id
+          })),
+          userClientTotal: userAssessments?.length || 0,
+          userClientConfirmed: confirmedAssessments?.length || 0,
+          userClientStatuses: userAssessments?.reduce((acc: any, a: any) => {
             acc[a.status] = (acc[a.status] || 0) + 1;
             return acc;
           }, {}) || {},

@@ -10,6 +10,7 @@ import {
   ClipboardCheck,
   MessageSquare,
   Settings,
+  Target,
 } from "lucide-react";
 import { LucideIcon } from "lucide-react";
 
@@ -42,6 +43,11 @@ export const studentSidebarConfig: StudentSidebarItem[] = [
     label: "My Assessments",
     href: "/student/assessments",
     icon: ClipboardCheck,
+  },
+  {
+    label: "My Mastery",
+    href: "/student/mastery",
+    icon: Target,
   },
   {
     label: "Feedback",

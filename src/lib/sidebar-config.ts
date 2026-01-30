@@ -504,6 +504,44 @@ export const sidebarConfig: SidebarSection[] = [
         allowedRoles: ["principal", "admin", "teacher"],
       },
       {
+        label: "Mastery Reports",
+        href: "/sis/mastery/reports/progress",
+        icon: FileBarChart,
+        allowedRoles: ["principal", "admin", "teacher"],
+        children: [
+          {
+            label: "Progress Report",
+            href: "/sis/mastery/reports/progress",
+            icon: FileText,
+            allowedRoles: ["principal", "admin", "teacher"],
+          },
+          {
+            label: "Term Summary",
+            href: "/sis/mastery/reports/term-summary",
+            icon: BarChart3,
+            allowedRoles: ["principal", "admin", "teacher"],
+          },
+          {
+            label: "Evidence Pack",
+            href: "/sis/mastery/reports/evidence-pack",
+            icon: FolderOpen,
+            allowedRoles: ["principal", "admin", "teacher"],
+          },
+          {
+            label: "Accreditation Pack",
+            href: "/sis/mastery/reports/accreditation-pack",
+            icon: Package,
+            allowedRoles: ["principal", "admin"],
+          },
+          {
+            label: "Radar Chart",
+            href: "/sis/mastery/reports/radar",
+            icon: Target,
+            allowedRoles: ["principal", "admin", "teacher"],
+          },
+        ],
+      },
+      {
         label: "Mastery Setup",
         href: "/sis/mastery/setup/models",
         icon: Settings,

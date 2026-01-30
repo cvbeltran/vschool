@@ -414,6 +414,13 @@ export default function StudentMasteryReviewPage() {
       }
 
       const savePromises = proposalEntries.map(async (proposal) => {
+        console.log(`[handleSaveDraft] Saving proposal for competency ${proposal.competency_id}:`, {
+          learner_id: studentId,
+          competency_id: proposal.competency_id,
+          mastery_level_id: proposal.mastery_level_id,
+          evidence_count: proposal.selected_evidence_ids.length
+        });
+
         const response = await fetch("/api/mastery/proposals", {
           method: "POST",
           headers: {
@@ -432,20 +439,29 @@ export default function StudentMasteryReviewPage() {
           }),
         });
 
+        console.log(`[handleSaveDraft] Response status: ${response.status} ${response.statusText}`);
+
         if (!response.ok) {
           const errorData = await response.json().catch(() => ({ error: "Unknown error" }));
+          console.error(`[handleSaveDraft] Error response:`, errorData);
           throw new Error(errorData.error || `Failed to save proposal for competency ${proposal.competency_id}`);
         }
 
-        return response.json();
+        const result = await response.json();
+        console.log(`[handleSaveDraft] Successfully saved proposal:`, result);
+        return result;
       });
 
-      await Promise.all(savePromises);
+      const results = await Promise.all(savePromises);
+      console.log(`[handleSaveDraft] All proposals saved successfully:`, results);
 
       toast({
         title: "Success",
         description: `Successfully saved ${proposalEntries.length} draft${proposalEntries.length > 1 ? "s" : ""}`,
       });
+      
+      // Don't navigate away - stay on the page so user can continue editing
+      console.log(`[handleSaveDraft] Save complete, staying on page`);
     } catch (error: any) {
       console.error("Error saving draft:", error);
       toast({
@@ -453,6 +469,7 @@ export default function StudentMasteryReviewPage() {
         description: error.message || "Failed to save draft",
         variant: "destructive",
       });
+      // Don't navigate on error either - let user see the error and retry
     } finally {
       setSaving(false);
     }
@@ -543,11 +560,28 @@ export default function StudentMasteryReviewPage() {
           </div>
         </div>
         <div className="flex gap-2">
-          <Button variant="outline" onClick={handleSaveDraft} disabled={saving}>
+          <Button 
+            type="button"
+            variant="outline" 
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              handleSaveDraft(e);
+            }} 
+            disabled={saving}
+          >
             <Save className="h-4 w-4 mr-2" />
             {saving ? "Saving..." : "Save Draft"}
           </Button>
-          <Button onClick={handleSubmit} disabled={submitting}>
+          <Button 
+            type="button"
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              handleSubmit();
+            }} 
+            disabled={submitting}
+          >
             <Send className="h-4 w-4 mr-2" />
             {submitting ? "Submitting..." : "Submit for Review"}
           </Button>
