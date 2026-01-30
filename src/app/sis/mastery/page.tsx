@@ -77,6 +77,8 @@ export default function MasteryDashboardPage() {
   const [schoolYears, setSchoolYears] = useState<Array<{ id: string; year_label: string }>>([]);
   const [experiences, setExperiences] = useState<Array<{ id: string; name: string }>>([]);
   const [syllabi, setSyllabi] = useState<Array<{ id: string; name: string }>>([]);
+  const [sections, setSections] = useState<Array<{ id: string; name: string }>>([]);
+  const [programs, setPrograms] = useState<Array<{ id: string; name: string }>>([]);
   const [masteryModels, setMasteryModels] = useState<MasteryModel[]>([]);
   
   // Snapshot generation dialog state
@@ -158,6 +160,31 @@ export default function MasteryDashboardPage() {
       const { data: syllabiData } = await syllabiQuery.order("name", { ascending: true });
       setSyllabi(syllabiData || []);
 
+      // Fetch sections
+      let sectionsQuery = supabase
+        .from("sections")
+        .select("id, name")
+        .is("archived_at", null);
+      
+      if (!isSuperAdmin && organizationId) {
+        sectionsQuery = sectionsQuery.eq("organization_id", organizationId);
+      }
+      
+      const { data: sectionsData } = await sectionsQuery.order("name", { ascending: true });
+      setSections(sectionsData || []);
+
+      // Fetch programs
+      let programsQuery = supabase
+        .from("programs")
+        .select("id, name");
+      
+      if (!isSuperAdmin && organizationId) {
+        programsQuery = programsQuery.eq("organization_id", organizationId);
+      }
+      
+      const { data: programsData } = await programsQuery.order("name", { ascending: true });
+      setPrograms(programsData || []);
+
       // Fetch mastery models
       if (organizationId) {
         const models = await listMasteryModels(organizationId, { isActive: true });
@@ -235,6 +262,7 @@ export default function MasteryDashboardPage() {
 
     try {
       setGeneratingSnapshot(true);
+      console.log("Starting snapshot generation with:", snapshotFormData);
       
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) {
@@ -253,17 +281,29 @@ export default function MasteryDashboardPage() {
         }),
       });
 
+      console.log("Snapshot generation response status:", response.status);
+
       if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || "Failed to generate snapshot");
+        const errorData = await response.json().catch(() => ({ error: "Unknown error" }));
+        console.error("Snapshot generation error:", errorData);
+        throw new Error(errorData.error || "Failed to generate snapshot");
       }
 
       const result = await response.json();
+      console.log("Snapshot generation result:", result);
       
-      toast({
-        title: "Success",
-        description: `Successfully generated ${result.snapshot_count} snapshots`,
-      });
+      if (result.snapshot_count === 0) {
+        toast({
+          title: "Warning",
+          description: "Snapshot run created but no snapshots were generated. This may mean there are no learners or competencies for this scope, or no evidence was found.",
+          variant: "default",
+        });
+      } else {
+        toast({
+          title: "Success",
+          description: `Successfully generated ${result.snapshot_count} snapshots. The snapshot run has been created and is available in Snapshot Runs.`,
+        });
+      }
 
       setSnapshotDialogOpen(false);
       setSnapshotFormData({
@@ -275,13 +315,21 @@ export default function MasteryDashboardPage() {
         term: "",
       });
       
-      // Refresh snapshots
+      // Refresh snapshots and navigate to snapshot runs page
       await fetchSnapshots();
+      
+      // Optionally navigate to the snapshot run detail page
+      if (result.snapshot_run_id) {
+        // Small delay to ensure data is saved
+        setTimeout(() => {
+          router.push(`/sis/mastery/runs/${result.snapshot_run_id}`);
+        }, 500);
+      }
     } catch (error: any) {
       console.error("Error generating snapshot", error);
       toast({
         title: "Error",
-        description: error.message || "Failed to generate snapshot",
+        description: error.message || "Failed to generate snapshot. Check the browser console for details.",
         variant: "destructive",
       });
     } finally {
@@ -405,8 +453,40 @@ export default function MasteryDashboardPage() {
                             {syllabus.name}
                           </SelectItem>
                         ))}
+                      {snapshotFormData.scope_type === "section" &&
+                        sections.map((section) => (
+                          <SelectItem key={section.id} value={section.id}>
+                            {section.name}
+                          </SelectItem>
+                        ))}
+                      {snapshotFormData.scope_type === "program" &&
+                        programs.map((program) => (
+                          <SelectItem key={program.id} value={program.id}>
+                            {program.name}
+                          </SelectItem>
+                        ))}
                     </SelectContent>
                   </Select>
+                  {snapshotFormData.scope_type === "section" && sections.length === 0 && (
+                    <p className="text-xs text-muted-foreground mt-1">
+                      No sections found. Create sections in Settings → Sections.
+                    </p>
+                  )}
+                  {snapshotFormData.scope_type === "program" && programs.length === 0 && (
+                    <p className="text-xs text-muted-foreground mt-1">
+                      No programs found. Create programs in Settings → Programs.
+                    </p>
+                  )}
+                  {snapshotFormData.scope_type === "experience" && experiences.length === 0 && (
+                    <p className="text-xs text-muted-foreground mt-1">
+                      No experiences found. Create experiences in AMS → Experiences.
+                    </p>
+                  )}
+                  {snapshotFormData.scope_type === "syllabus" && syllabi.length === 0 && (
+                    <p className="text-xs text-muted-foreground mt-1">
+                      No syllabi found. Create syllabi in Pedagogy Operations → Syllabus.
+                    </p>
+                  )}
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="school_year">School Year</Label>

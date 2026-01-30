@@ -61,7 +61,9 @@ export async function GET(request: NextRequest) {
 
     if (type === "review") {
       // Reviewer queue: submitted proposals
-      const proposals = await listMasteryProposalsForReview(profile.organization_id);
+      // Use server-side supabase client for proper RLS context
+      const proposals = await listMasteryProposalsForReview(profile.organization_id, supabaseServer);
+      console.log(`[proposals API] Review queue: found ${proposals.length} proposals`);
       return NextResponse.json({ proposals });
     } else {
       // Teacher drafts - query directly using server-side supabase
@@ -133,6 +135,16 @@ export async function POST(request: NextRequest) {
       highlight_evidence_ids,
     } = body;
 
+    console.log(`[proposals API] Received request body:`, {
+      learner_id,
+      competency_id,
+      mastery_level_id,
+      hasRationale: !!rationale_text,
+      hasHighlightEvidenceIds: !!highlight_evidence_ids,
+      highlightEvidenceIdsCount: highlight_evidence_ids?.length || 0,
+      highlightEvidenceIds: highlight_evidence_ids
+    });
+
     if (!learner_id || !competency_id || !mastery_level_id || !rationale_text) {
       return NextResponse.json(
         { error: "Missing required fields: learner_id, competency_id, mastery_level_id, rationale_text" },
@@ -144,6 +156,10 @@ export async function POST(request: NextRequest) {
     const authHeader = request.headers.get("authorization");
     const accessToken = authHeader?.replace("Bearer ", "") || null;
     
+    if (!accessToken) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
     const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
     
@@ -152,15 +168,43 @@ export async function POST(request: NextRequest) {
     const { createClient } = await import("@supabase/supabase-js");
     const userSupabase = createClient(supabaseUrl, supabaseAnonKey, {
       global: {
-        headers: accessToken ? {
+        headers: {
           Authorization: `Bearer ${accessToken}`,
-        } : {},
+        },
       },
       auth: {
         persistSession: false,
         autoRefreshToken: false,
         detectSessionInUrl: false,
       },
+    });
+    
+    // Set the session manually for RLS - this ensures current_organization_id() works
+    // The session must be set for database functions like current_organization_id() to access JWT claims
+    const { data: sessionData, error: sessionError } = await userSupabase.auth.setSession({
+      access_token: accessToken,
+      refresh_token: "", // Not needed for server-side
+    } as any);
+    
+    if (sessionError) {
+      logError("Error setting session for RLS", sessionError);
+      // Continue anyway - the Authorization header might still work
+    }
+    
+    // Verify the session was set correctly
+    if (!sessionData?.session) {
+      console.warn("[proposals API] Session not set correctly, but continuing with Authorization header");
+    }
+
+    console.log(`[proposals API] Creating mastery draft:`, {
+      learner_id,
+      competency_id,
+      mastery_level_id,
+      organization_id: profile.organization_id,
+      school_id: schoolId,
+      teacher_id: user.id,
+      highlight_evidence_ids_count: highlight_evidence_ids?.length || 0,
+      highlight_evidence_ids: highlight_evidence_ids
     });
 
     const proposal = await upsertMasteryDraft(
@@ -174,8 +218,15 @@ export async function POST(request: NextRequest) {
         school_id: schoolId,
       },
       userSupabase,
-      user.id
+      user.id,
+      supabaseServer // Pass service role client as fallback for RLS function issues
     );
+
+    console.log(`[proposals API] Successfully created mastery draft:`, {
+      proposal_id: proposal.id,
+      learner_id: proposal.learner_id,
+      competency_id: proposal.competency_id
+    });
 
     return NextResponse.json({ proposal });
   } catch (error: any) {
