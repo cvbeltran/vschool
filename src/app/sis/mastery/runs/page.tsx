@@ -26,6 +26,11 @@ export default function SnapshotRunsPage() {
           throw new Error("Not authenticated");
         }
 
+        console.log("[SnapshotRunsPage] Fetching runs with:", {
+          organizationId,
+          isSuperAdmin,
+        });
+
         const response = await fetch("/api/mastery/runs", {
           headers: {
             Authorization: `Bearer ${session.access_token}`,
@@ -34,20 +39,25 @@ export default function SnapshotRunsPage() {
 
         if (!response.ok) {
           const error = await response.json();
+          console.error("[SnapshotRunsPage] API error:", error);
           throw new Error(error.error || "Failed to fetch snapshot runs");
         }
 
         const { runs: data } = await response.json();
+        console.log("[SnapshotRunsPage] Received runs:", {
+          count: data?.length || 0,
+          runs: data,
+        });
         setRuns(data || []);
       } catch (error) {
-        console.error("Error fetching snapshot runs", error);
+        console.error("[SnapshotRunsPage] Error fetching snapshot runs", error);
       } finally {
         setLoading(false);
       }
     };
 
     fetchRuns();
-  }, [organizationId, orgLoading]);
+  }, [organizationId, orgLoading, isSuperAdmin]);
 
   if (loading) {
     return (
@@ -75,8 +85,18 @@ export default function SnapshotRunsPage() {
       <Card>
         <CardContent className="pt-6">
           {runs.length === 0 ? (
-            <div className="text-center py-8 text-muted-foreground">
-              No snapshot runs found. Generate a snapshot from the dashboard to get started.
+            <div className="text-center py-8 space-y-2">
+              <div className="text-muted-foreground">
+                No snapshot runs found. Generate a snapshot from the dashboard to get started.
+              </div>
+              {organizationId && (
+                <div className="text-xs text-muted-foreground mt-4 p-3 bg-muted rounded">
+                  <div>Current Organization ID: {organizationId}</div>
+                  <div className="mt-1">
+                    If you have snapshot runs in the database but they're not showing, they may belong to a different organization.
+                  </div>
+                </div>
+              )}
             </div>
           ) : (
             <div className="space-y-4">

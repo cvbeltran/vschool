@@ -32,7 +32,7 @@ async function verifyAccess(request: NextRequest) {
  */
 export async function POST(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     const { user, error: authError } = await verifyAccess(request);
@@ -40,8 +40,13 @@ export async function POST(
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
+    // Await params in Next.js 15+
+    const { id } = await params;
+
     const body = await request.json();
     const { action, reviewer_notes, override_level_id, override_justification } = body;
+
+    console.log(`[review API] Reviewing proposal ${id} with action: ${action}`);
 
     if (!action || !["approve", "request_changes", "override"].includes(action)) {
       return NextResponse.json(
@@ -57,16 +62,49 @@ export async function POST(
       );
     }
 
+    // Create a user-specific Supabase client with their access token for RLS
+    const authHeader = request.headers.get("authorization");
+    const accessToken = authHeader?.replace("Bearer ", "") || null;
+    
+    if (!accessToken) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+    const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+    
+    const { createClient } = await import("@supabase/supabase-js");
+    const userSupabase = createClient(supabaseUrl, supabaseAnonKey, {
+      global: {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+      },
+      auth: {
+        persistSession: false,
+        autoRefreshToken: false,
+        detectSessionInUrl: false,
+      },
+    });
+    
+    // Set the session manually for RLS
+    await userSupabase.auth.setSession({
+      access_token: accessToken,
+      refresh_token: "",
+    } as any);
+
     const proposal = await reviewMasteryProposal({
-      snapshot_id: params.id,
+      snapshot_id: id,
       action,
       reviewer_notes,
       override_level_id,
       override_justification,
-    });
+    }, userSupabase, user.id);
 
+    console.log(`[review API] Successfully reviewed proposal ${id}`);
     return NextResponse.json({ proposal });
   } catch (error: any) {
+    console.error(`[review API] Error reviewing proposal:`, error);
     logError("Error reviewing mastery proposal", error);
     return NextResponse.json(
       { error: error.message || "Failed to review proposal" },

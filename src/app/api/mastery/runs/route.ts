@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabaseServer } from "@/lib/supabase/server";
 import { listSnapshotRuns } from "@/lib/mastery";
 import { logError } from "@/lib/logger";
+import { createClient } from "@supabase/supabase-js";
 
 /**
  * Helper to verify access and get user profile
@@ -70,7 +71,41 @@ export async function GET(request: NextRequest) {
       Object.entries(filters).filter(([_, v]) => v != null)
     );
 
-    const runs = await listSnapshotRuns(organizationId, cleanFilters);
+    // Debug logging
+    console.log("[GET /api/mastery/runs] Request params:", {
+      userId: user.id,
+      profileRole: profile.role,
+      isSuperAdmin: profile.is_super_admin,
+      organizationId,
+      filters: cleanFilters,
+    });
+
+    // Create an authenticated Supabase client using the user's JWT token
+    // This ensures RLS policies are enforced correctly
+    const authHeader = request.headers.get("authorization");
+    const token = authHeader?.replace("Bearer ", "");
+    
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+    
+    if (!supabaseUrl || !supabaseAnonKey) {
+      throw new Error("Missing Supabase environment variables");
+    }
+
+    const authenticatedClient = createClient(supabaseUrl, supabaseAnonKey, {
+      global: {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      },
+    });
+
+    const runs = await listSnapshotRuns(organizationId, cleanFilters, authenticatedClient);
+
+    console.log("[GET /api/mastery/runs] Response:", {
+      runsCount: runs.length,
+      runIds: runs.map((r) => r.id),
+    });
 
     return NextResponse.json({ runs });
   } catch (error: any) {
