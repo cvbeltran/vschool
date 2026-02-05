@@ -638,10 +638,12 @@ export async function listSectionStudents(
     .order("created_at", { ascending: true });
 
   if (error) {
-    console.warn("Failed to list section students:", error);
+    console.error("Failed to list section students:", error);
+    console.error("Error details:", JSON.stringify(error, null, 2));
     return [];
   }
 
+  console.log(`Found ${data?.length || 0} students for section ${sectionId}:`, data);
   return (data || []) as SectionStudent[];
 }
 
@@ -692,6 +694,136 @@ export async function addStudentToSection(
   });
 
   return sectionStudent as SectionStudent;
+}
+
+/**
+ * Sync existing enrollments to section_students table
+ * This is a one-time migration function to sync students who were enrolled
+ * with a section_id but don't have a corresponding section_students entry
+ */
+export async function syncEnrollmentsToSectionStudents(
+  organizationId: string
+): Promise<{ synced: number; skipped: number; errors: number }> {
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
+  if (!session) {
+    throw new Error("No active session");
+  }
+
+  let synced = 0;
+  let skipped = 0;
+  let errors = 0;
+
+  try {
+    // Find all admissions that:
+    // 1. Have a section_id
+    // 2. Have status = 'enrolled'
+    // 3. Have a corresponding student record
+    // First, get all enrolled admissions with section_id
+    const { data: admissions, error: fetchError } = await supabase
+      .from("admissions")
+      .select("id, organization_id, school_id, section_id")
+      .eq("organization_id", organizationId)
+      .eq("status", "enrolled")
+      .not("section_id", "is", null)
+      .not("school_id", "is", null);
+
+    if (fetchError) {
+      throw new Error(`Failed to fetch enrollments: ${fetchError.message}`);
+    }
+
+    if (!admissions || admissions.length === 0) {
+      return { synced: 0, skipped: 0, errors: 0 };
+    }
+
+    // Then, for each admission, find the corresponding student
+    const enrollments: Array<{
+      id: string;
+      organization_id: string;
+      school_id: string;
+      section_id: string;
+      student_id: string | null;
+    }> = [];
+
+    for (const admission of admissions) {
+      const { data: student } = await supabase
+        .from("students")
+        .select("id")
+        .eq("admission_id", admission.id)
+        .maybeSingle();
+
+      enrollments.push({
+        ...admission,
+        student_id: student?.id || null,
+      });
+    }
+
+    if (fetchError) {
+      throw new Error(`Failed to fetch enrollments: ${fetchError.message}`);
+    }
+
+    if (!enrollments || enrollments.length === 0) {
+      return { synced: 0, skipped: 0, errors: 0 };
+    }
+
+    // Process each enrollment
+    for (const enrollment of enrollments) {
+      try {
+        if (!enrollment.student_id) {
+          skipped++;
+          continue;
+        }
+
+        const studentId = enrollment.student_id;
+        const sectionId = enrollment.section_id;
+        const schoolId = enrollment.school_id;
+
+        // Check if student is already in section_students for this section
+        const { data: existing } = await supabase
+          .from("section_students")
+          .select("id")
+          .eq("student_id", studentId)
+          .eq("section_id", sectionId)
+          .eq("status", "active")
+          .is("end_date", null)
+          .maybeSingle();
+
+        if (existing) {
+          skipped++;
+          continue;
+        }
+
+        // Add student to section_students
+        const { data: inserted, error: insertError } = await supabase
+          .from("section_students")
+          .insert({
+            organization_id: organizationId,
+            school_id: schoolId,
+            section_id: sectionId,
+            student_id: studentId,
+            start_date: new Date().toISOString().split("T")[0],
+            status: "active",
+          })
+          .select();
+
+        if (insertError) {
+          console.error(`Failed to sync enrollment ${enrollment.id} (student ${studentId}, section ${sectionId}):`, insertError);
+          errors++;
+        } else {
+          console.log(`Successfully synced student ${studentId} to section ${sectionId}`);
+          synced++;
+        }
+      } catch (error: any) {
+        console.error(`Error processing enrollment ${enrollment.id}:`, error);
+        errors++;
+      }
+    }
+
+    return { synced, skipped, errors };
+  } catch (error: any) {
+    throw new Error(`Sync failed: ${error.message}`);
+  }
 }
 
 /**
