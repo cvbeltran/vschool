@@ -8,6 +8,7 @@ import { getMyStudentRow } from "@/lib/student/student-data";
 import { Target, Calendar, FileText } from "lucide-react";
 import { supabase } from "@/lib/supabase/client";
 import { MasteryRadarChart, type RadarChartDataPoint } from "@/components/mastery/mastery-radar-chart";
+import { logError, logDebug } from "@/lib/logger";
 
 interface CurrentSnapshot {
   learner_id: string;
@@ -83,13 +84,13 @@ export default function StudentMasteryPage() {
             .order("created_at", { ascending: false });
 
           if (snapshotsError) {
-            console.error("[StudentMastery] Error fetching snapshots:", snapshotsError);
+            logError("[StudentMastery] Error fetching snapshots", snapshotsError, { studentId: student.id });
             throw snapshotsError;
           }
 
           const approvedSnapshots = rawSnapshots || [];
 
-          console.log("[StudentMastery] Fetched raw snapshots:", {
+          logDebug("[StudentMastery] Fetched raw snapshots", {
             total: approvedSnapshots.length,
             sample: approvedSnapshots[0],
             mastery_level_ids: approvedSnapshots.map((s: any) => s.mastery_level_id).filter(Boolean),
@@ -109,7 +110,7 @@ export default function StudentMasteryPage() {
           const competenciesMap = new Map<string, any>();
           if (competencyIds.size > 0) {
             const competencyIdsArray = Array.from(competencyIds);
-            console.log("[StudentMastery] Fetching competencies:", competencyIdsArray);
+            logDebug("[StudentMastery] Fetching competencies", { competencyIdsArray });
             
             const { data: competencies, error: compError } = await supabase
               .from("competencies")
@@ -117,24 +118,22 @@ export default function StudentMasteryPage() {
               .in("id", competencyIdsArray);
 
             if (compError) {
-              console.error("[StudentMastery] Error fetching competencies:", compError);
+              logError("[StudentMastery] Error fetching competencies", compError, { competencyIdsArray });
             } else {
-              console.log("[StudentMastery] Fetched competencies:", competencies);
+              logDebug("[StudentMastery] Fetched competencies", { count: competencies?.length });
               if (competencies) {
                 competencies.forEach((c: any) => {
                   competenciesMap.set(c.id, c);
                 });
               }
             }
-          } else {
-            console.warn("[StudentMastery] No competency IDs found in snapshots");
           }
 
           // Fetch mastery levels - CRITICAL: This must succeed for the page to work
           const masteryLevelsMap = new Map<string, any>();
           if (masteryLevelIds.size > 0) {
             const masteryLevelIdsArray = Array.from(masteryLevelIds);
-            console.log("[StudentMastery] Fetching mastery levels:", {
+            logDebug("[StudentMastery] Fetching mastery levels", {
               count: masteryLevelIdsArray.length,
               ids: masteryLevelIdsArray,
             });
@@ -144,25 +143,12 @@ export default function StudentMasteryPage() {
               .select("id, label, description, display_order, is_terminal")
               .in("id", masteryLevelIdsArray);
 
-            console.log("[StudentMastery] Mastery levels query result:", {
-              requested_ids: masteryLevelIdsArray,
-              has_error: !!levelsError,
-              error: levelsError,
-              has_data: !!levels,
-              data_length: levels?.length || 0,
-              data: levels,
-            });
-
             if (levelsError) {
-              console.error("[StudentMastery] CRITICAL ERROR fetching mastery levels:", {
-                error: levelsError,
-                message: levelsError.message,
-                code: levelsError.code,
-                details: levelsError.details,
-                hint: levelsError.hint,
+              logError("[StudentMastery] CRITICAL ERROR fetching mastery levels", levelsError, {
+                requested_ids: masteryLevelIdsArray,
               });
               // Try fetching one by one as fallback
-              console.log("[StudentMastery] Attempting to fetch mastery levels one by one as fallback...");
+              logDebug("[StudentMastery] Attempting to fetch mastery levels one by one as fallback");
               for (const levelId of masteryLevelIdsArray) {
                 const { data: singleLevel, error: singleError } = await supabase
                   .from("mastery_levels")
@@ -171,14 +157,9 @@ export default function StudentMasteryPage() {
                   .single();
                 
                 if (singleError) {
-                  console.error(`[StudentMastery] Error fetching mastery level ${levelId}:`, singleError);
+                  logError(`[StudentMastery] Error fetching mastery level ${levelId}`, singleError);
                 } else if (singleLevel) {
                   masteryLevelsMap.set(singleLevel.id, singleLevel);
-                  console.log(`[StudentMastery] Added mastery level to map (fallback):`, {
-                    id: singleLevel.id,
-                    label: singleLevel.label,
-                    display_order: singleLevel.display_order,
-                  });
                 }
               }
             } else {
@@ -186,27 +167,17 @@ export default function StudentMasteryPage() {
                 levels.forEach((l: any) => {
                   if (l.id) {
                     masteryLevelsMap.set(l.id, l);
-                    console.log(`[StudentMastery] Added mastery level to map:`, {
-                      id: l.id,
-                      label: l.label,
-                      display_order: l.display_order,
-                    });
-                  } else {
-                    console.warn(`[StudentMastery] Skipping mastery level without ID:`, l);
                   }
                 });
-                console.log(`[StudentMastery] Mastery levels map now has ${masteryLevelsMap.size} entries`, {
-                  map_keys: Array.from(masteryLevelsMap.keys()),
+                logDebug(`[StudentMastery] Mastery levels map populated`, {
+                  map_size: masteryLevelsMap.size,
                 });
               } else {
-                console.error("[StudentMastery] CRITICAL: No mastery levels returned from query!", {
+                logError("[StudentMastery] CRITICAL: No mastery levels returned from query", undefined, {
                   requested_ids: masteryLevelIdsArray,
-                  response: levels,
-                  response_type: typeof levels,
-                  response_is_array: Array.isArray(levels),
                 });
                 // Try fetching one by one as fallback
-                console.log("[StudentMastery] Attempting to fetch mastery levels one by one as fallback...");
+                logDebug("[StudentMastery] Attempting to fetch mastery levels one by one as fallback");
                 for (const levelId of masteryLevelIdsArray) {
                   const { data: singleLevel, error: singleError } = await supabase
                     .from("mastery_levels")
@@ -215,24 +186,16 @@ export default function StudentMasteryPage() {
                     .single();
                   
                   if (singleError) {
-                    console.error(`[StudentMastery] Error fetching mastery level ${levelId}:`, singleError);
+                    logError(`[StudentMastery] Error fetching mastery level ${levelId}`, singleError);
                   } else if (singleLevel) {
                     masteryLevelsMap.set(singleLevel.id, singleLevel);
-                    console.log(`[StudentMastery] Added mastery level to map (fallback):`, {
-                      id: singleLevel.id,
-                      label: singleLevel.label,
-                      display_order: singleLevel.display_order,
-                    });
                   }
                 }
               }
             }
           } else {
-            console.error("[StudentMastery] CRITICAL: No mastery level IDs found in snapshots!", {
-              snapshots: approvedSnapshots.map((s: any) => ({
-                id: s.id,
-                mastery_level_id: s.mastery_level_id,
-              })),
+            logError("[StudentMastery] CRITICAL: No mastery level IDs found in snapshots", undefined, {
+              snapshot_count: approvedSnapshots.length,
             });
           }
 
@@ -269,9 +232,8 @@ export default function StudentMasteryPage() {
             
             // Debug: Check if map lookup worked
             if (snapshot.mastery_level_id && !masteryLevel) {
-              console.error(`[StudentMastery] CRITICAL: Mastery level ${snapshot.mastery_level_id} not found in map!`, {
+              logError(`[StudentMastery] CRITICAL: Mastery level ${snapshot.mastery_level_id} not found in map`, undefined, {
                 map_size: masteryLevelsMap.size,
-                map_keys: Array.from(masteryLevelsMap.keys()),
                 requested_id: snapshot.mastery_level_id,
               });
             }
@@ -287,27 +249,14 @@ export default function StudentMasteryPage() {
             const finalMasteryLabel = masteryLabel || snapshot.mastery_level?.label || null;
             const finalMasteryDisplayOrder = masteryDisplayOrder ?? snapshot.mastery_level?.display_order ?? null;
             
-            console.log("[StudentMastery] Enriching snapshot:", {
+            logDebug("[StudentMastery] Enriching snapshot", {
               id: snapshot.id,
               competency_id: snapshot.competency_id,
               outcome_id: snapshot.outcome_id,
               mastery_level_id: snapshot.mastery_level_id,
-              competency_from_map: !!(snapshot.competency_id && competenciesMap.get(snapshot.competency_id)),
-              competency_from_join: !!snapshot.competency,
-              outcome_from_map: !!(snapshot.outcome_id && competenciesMap.get(snapshot.outcome_id)),
-              outcome_from_join: !!snapshot.outcome,
-              mastery_level_from_map: !!(snapshot.mastery_level_id && masteryLevelsMap.get(snapshot.mastery_level_id)),
-              mastery_level_from_join: !!snapshot.mastery_level,
-              mastery_level_from_join_has_label: !!snapshot.mastery_level?.label,
-              mastery_level_from_join_has_display_order: snapshot.mastery_level?.display_order !== undefined,
-              mastery_level_from_map_has_label: !!masteryLevel?.label,
-              mastery_level_from_map_has_display_order: masteryLevel?.display_order !== undefined,
               competency_found: !!competency,
               outcome_found: !!outcome,
               mastery_level_found: !!masteryLevel,
-              competency_name: competency?.name || outcome?.name,
-              mastery_level_label: finalMasteryLabel,
-              mastery_level_display_order: finalMasteryDisplayOrder,
             });
 
             return {
@@ -323,10 +272,10 @@ export default function StudentMasteryPage() {
 
           const allSnapshots = enrichedSnapshots;
 
-          console.log("[StudentMastery] Enriched snapshots sample:", {
-            competency: enrichedSnapshots[0]?.competency?.name,
-            mastery_level: enrichedSnapshots[0]?.mastery_level?.label,
-            display_order: enrichedSnapshots[0]?.mastery_level_display_order,
+          logDebug("[StudentMastery] Enriched snapshots", {
+            count: enrichedSnapshots.length,
+            sample_competency: enrichedSnapshots[0]?.competency?.name,
+            sample_mastery_level: enrichedSnapshots[0]?.mastery_level?.label,
           });
 
           // Enhance enriched snapshots with evidence highlights and history
@@ -359,18 +308,6 @@ export default function StudentMasteryPage() {
                 }));
 
               const competencyName = snapshot.competency?.name || snapshot.outcome?.name || "Unknown Competency";
-              
-              console.log("[StudentMastery] Enhancing snapshot:", {
-                id: snapshot.id,
-                competency_id: snapshot.competency_id,
-                outcome_id: snapshot.outcome_id,
-                competency: snapshot.competency,
-                outcome: snapshot.outcome,
-                competency_name: competencyName,
-                mastery_level: snapshot.mastery_level,
-                mastery_level_label: snapshot.mastery_level_label,
-                mastery_level_display_order: snapshot.mastery_level_display_order,
-              });
 
               // Preserve all enriched data including mastery level info
               return {
@@ -384,7 +321,7 @@ export default function StudentMasteryPage() {
             })
           );
 
-          console.log("[StudentMastery] Found snapshots:", {
+          logDebug("[StudentMastery] Found snapshots", {
             total: allSnapshots?.length || 0,
             approved: approvedSnapshots.length,
             enhanced: enhancedSnapshots.length,
@@ -392,7 +329,7 @@ export default function StudentMasteryPage() {
           setSnapshots(enhancedSnapshots);
         }
       } catch (error) {
-        console.error("Error fetching mastery snapshots", error);
+        logError("Error fetching mastery snapshots", error);
         setSnapshots([]);
       } finally {
         setLoading(false);
@@ -493,12 +430,12 @@ export default function StudentMasteryPage() {
                 };
               });
             
-            console.log("[StudentMastery] Radar chart data (latest per competency):", {
+            logDebug("[StudentMastery] Radar chart data (latest per competency)", {
               total_competencies: radarData.length,
               data: radarData,
             });
 
-            console.log("[StudentMastery] Radar chart data:", {
+            logDebug("[StudentMastery] Radar chart data", {
               count: radarData.length,
               data: radarData,
             });

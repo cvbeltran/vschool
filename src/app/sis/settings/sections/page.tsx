@@ -34,6 +34,8 @@ interface Section {
   name: string;
   sort_order: number | null;
   is_active: boolean;
+  primary_classification: string | null;
+  classification_source: string | null;
   created_at: string;
 }
 
@@ -69,7 +71,9 @@ export default function SectionsPage() {
     name: "",
     sort_order: null as number | null,
     is_active: true,
+    primary_classification: "" as string | null,
   });
+  const [availableClassifications, setAvailableClassifications] = useState<string[]>([]);
 
   useEffect(() => {
     setMounted(true);
@@ -204,8 +208,39 @@ export default function SectionsPage() {
       setLoading(false);
     };
 
+    // Fetch available classifications (profile keys) for the organization
+    const fetchClassifications = async () => {
+      if (orgLoading) return;
+
+      let schemesQuery = supabase
+        .from("gradebook_schemes")
+        .select("id")
+        .is("archived_at", null);
+
+      if (!isSuperAdmin && organizationId) {
+        schemesQuery = schemesQuery.eq("organization_id", organizationId);
+      }
+
+      const { data: schemes } = await schemesQuery;
+
+      if (schemes && schemes.length > 0) {
+        const schemeIds = schemes.map((s: any) => s.id);
+        const { data: profiles } = await supabase
+          .from("gradebook_weight_profiles")
+          .select("profile_key")
+          .in("scheme_id", schemeIds)
+          .is("archived_at", null);
+
+        if (profiles) {
+          const uniqueKeys = [...new Set(profiles.map((p: any) => p.profile_key))].sort();
+          setAvailableClassifications(uniqueKeys);
+        }
+      }
+    };
+
     if (!orgLoading) {
       fetchData();
+      fetchClassifications();
     }
   }, [selectedSchoolId, organizationId, isSuperAdmin, orgLoading]);
 
@@ -220,6 +255,7 @@ export default function SectionsPage() {
       name: "",
       sort_order: null,
       is_active: true,
+      primary_classification: null,
     });
     setIsDialogOpen(true);
   };
@@ -233,6 +269,7 @@ export default function SectionsPage() {
       name: section.name,
       sort_order: section.sort_order,
       is_active: section.is_active,
+      primary_classification: section.primary_classification,
     });
     setIsDialogOpen(true);
   };
@@ -247,16 +284,24 @@ export default function SectionsPage() {
 
     if (editingSection) {
       // Update existing section
+      const updateData: any = {
+        school_id: formData.school_id,
+        program_id: formData.program_id,
+        code: formData.code,
+        name: formData.name,
+        sort_order: formData.sort_order,
+        is_active: formData.is_active,
+      };
+
+      // Update classification if changed
+      if (formData.primary_classification !== editingSection.primary_classification) {
+        updateData.primary_classification = formData.primary_classification || null;
+        updateData.classification_source = formData.primary_classification ? "manual" : null;
+      }
+
       const { error: updateError } = await supabase
         .from("sections")
-        .update({
-          school_id: formData.school_id,
-          program_id: formData.program_id,
-          code: formData.code,
-          name: formData.name,
-          sort_order: formData.sort_order,
-          is_active: formData.is_active,
-        })
+        .update(updateData)
         .eq("id", editingSection.id);
 
       if (updateError) {
@@ -300,6 +345,8 @@ export default function SectionsPage() {
           name: formData.name,
           sort_order: formData.sort_order,
           is_active: formData.is_active,
+          primary_classification: formData.primary_classification || null,
+          classification_source: formData.primary_classification ? "manual" : null,
         },
       ]);
 
@@ -319,7 +366,7 @@ export default function SectionsPage() {
     // Refresh sections list
     let query = supabase
       .from("sections")
-      .select("id, school_id, program_id, code, name, sort_order, is_active, created_at")
+      .select("id, school_id, program_id, code, name, sort_order, is_active, primary_classification, classification_source, created_at")
       .order("sort_order", { ascending: true, nullsFirst: false })
       .order("name", { ascending: true });
 
@@ -432,6 +479,7 @@ export default function SectionsPage() {
                 <th className="px-4 py-3 text-left text-sm font-medium">Program</th>
                 <th className="px-4 py-3 text-left text-sm font-medium">Code</th>
                 <th className="px-4 py-3 text-left text-sm font-medium">Name</th>
+                <th className="px-4 py-3 text-left text-sm font-medium">Classification</th>
                 <th className="px-4 py-3 text-left text-sm font-medium">Status</th>
                 {canEdit && (
                   <th className="px-4 py-3 text-left text-sm font-medium">Actions</th>
@@ -445,6 +493,20 @@ export default function SectionsPage() {
                   <td className="px-4 py-3 text-sm">{getProgramName(section.program_id)}</td>
                   <td className="px-4 py-3 text-sm">{section.code}</td>
                   <td className="px-4 py-3 text-sm">{section.name}</td>
+                  <td className="px-4 py-3 text-sm">
+                    {section.primary_classification ? (
+                      <div>
+                        <span className="font-mono">{section.primary_classification}</span>
+                        {section.classification_source && (
+                          <span className="text-muted-foreground text-xs ml-2">
+                            ({section.classification_source})
+                          </span>
+                        )}
+                      </div>
+                    ) : (
+                      <span className="text-muted-foreground text-xs">Not set</span>
+                    )}
+                  </td>
                   <td className="px-4 py-3 text-sm">
                     {section.is_active ? (
                       <span className="text-green-600">Active</span>
@@ -576,6 +638,35 @@ export default function SectionsPage() {
                 }}
                 placeholder="Optional"
               />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="primary_classification">
+                Primary Classification (for Grading)
+              </Label>
+              <Select
+                value={formData.primary_classification || "__none__"}
+                onValueChange={(value) =>
+                  setFormData({ ...formData, primary_classification: value === "__none__" ? null : value })
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Select classification (optional)" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__none__">None (will use default profile)</SelectItem>
+                  {availableClassifications.map((key) => (
+                    <SelectItem key={key} value={key}>
+                      {key}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-muted-foreground text-xs">
+                Determines which weight profile is used for grade computation. 
+                {availableClassifications.length > 0 && (
+                  <> Available: {availableClassifications.join(", ")}</>
+                )}
+              </p>
             </div>
             <div className="flex items-center gap-2">
               <Switch

@@ -30,13 +30,19 @@ export function ToastProvider({ children }: ToastProviderProps) {
 
   const addToast = useCallback(
     ({ message, type = "info", duration }: ToastInput) => {
+      // Validate message is present
+      if (!message || message.trim() === "") {
+        console.warn("[useToast] Toast called without a message");
+        return;
+      }
+
       const id = typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
 
       setToasts((current) => [
         ...current,
         {
           id,
-          message,
+          message: message.trim(),
           type,
           duration,
         },

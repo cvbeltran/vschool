@@ -4,6 +4,7 @@
  */
 
 import { supabase } from "@/lib/supabase/client";
+import { logError } from "@/lib/logger";
 
 export interface UploadResult {
   url: string;
@@ -64,7 +65,7 @@ export async function uploadPortfolioFile(
     const storagePath = `${pathPrefix}/${fileName}`;
 
     // Upload file to storage
-    const { data, error } = await supabase.storage
+    const { error } = await supabase.storage
       .from("portfolio-artifacts")
       .upload(storagePath, file, {
         cacheControl: "3600",
@@ -72,7 +73,7 @@ export async function uploadPortfolioFile(
       });
 
     if (error) {
-      console.error("Error uploading file:", error);
+      logError("Error uploading file", error, { studentId, storagePath });
       return {
         url: "",
         path: "",
@@ -90,7 +91,7 @@ export async function uploadPortfolioFile(
       path: storagePath,
     };
   } catch (error: any) {
-    console.error("Error in uploadPortfolioFile:", error);
+    logError("Error in uploadPortfolioFile", error, { studentId, artifactId });
     return {
       url: "",
       path: "",
@@ -110,11 +111,11 @@ export async function deletePortfolioFile(path: string): Promise<void> {
       .remove([path]);
 
     if (error) {
-      console.error("Error deleting file:", error);
+      logError("Error deleting file", error, { path });
       throw error;
     }
   } catch (error: any) {
-    console.error("Error in deletePortfolioFile:", error);
+    logError("Error in deletePortfolioFile", error, { path });
     throw error;
   }
 }
@@ -180,7 +181,7 @@ export async function uploadPortfolioFileForStudent(
     const storagePath = `${pathPrefix}/${fileName}`;
 
     // Upload file to storage
-    const { data, error } = await supabase.storage
+    const { error } = await supabase.storage
       .from("portfolio-artifacts")
       .upload(storagePath, file, {
         cacheControl: "3600",
@@ -188,7 +189,7 @@ export async function uploadPortfolioFileForStudent(
       });
 
     if (error) {
-      console.error("Error uploading file:", error);
+      logError("Error uploading file", error, { studentId, organizationId, storagePath });
       return {
         url: "",
         path: "",
@@ -206,7 +207,7 @@ export async function uploadPortfolioFileForStudent(
       path: storagePath,
     };
   } catch (error: any) {
-    console.error("Error in uploadPortfolioFileForStudent:", error);
+    logError("Error in uploadPortfolioFileForStudent", error, { studentId, organizationId, artifactId });
     return {
       url: "",
       path: "",

@@ -439,7 +439,7 @@ CREATE POLICY "domains_update_admin"
 -- competencies
 -- ============================================================================
 
--- SELECT: principal, admin, registrar, mentor (staff roles only, excludes students/guardians)
+-- SELECT: principal, admin, registrar, mentor, student (students need read access for mastery display)
 DROP POLICY IF EXISTS "competencies_select_org_members" ON competencies;
 CREATE POLICY "competencies_select_org_members"
   ON competencies FOR SELECT
@@ -447,7 +447,7 @@ CREATE POLICY "competencies_select_org_members"
     (organization_id = current_organization_id() OR is_super_admin(current_profile_id()))
     AND (school_id IS NULL OR can_access_school(school_id))
     AND (archived_at IS NULL)
-    AND (is_org_admin() OR is_registrar() OR is_mentor())
+    AND (is_org_admin() OR is_registrar() OR is_mentor() OR is_student())
   );
 
 -- INSERT: principal, admin only
