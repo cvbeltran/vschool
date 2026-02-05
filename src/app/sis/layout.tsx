@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
@@ -17,6 +17,7 @@ import { normalizeRole } from "@/lib/rbac";
 import { getSidebarForRole, type NormalizedRole } from "@/lib/sidebar-config";
 import { useOrganization } from "@/lib/hooks/use-organization";
 import { OrganizationSwitcher } from "@/components/admin/organization-switcher";
+import { ToastProvider } from "@/hooks/use-toast";
 
 export default function SISLayout({
   children,
@@ -30,6 +31,7 @@ export default function SISLayout({
   const [mounted, setMounted] = useState(false);
   const { organization, isLoading: orgLoading, isSuperAdmin, selectedOrganizationId, setSelectedOrganizationId } = useOrganization();
   const [collapsedSections, setCollapsedSections] = useState<Set<number>>(new Set());
+  const [expandedItems, setExpandedItems] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     setMounted(true);
@@ -77,8 +79,42 @@ export default function SISLayout({
     checkSessionAndFetchRole();
   }, [router, pathname]);
 
-  // Get filtered sidebar config for current role and super admin status
-  const sidebarSections = getSidebarForRole(role, isSuperAdmin || false);
+  // Get filtered sidebar config for current role and super admin status (memoized)
+  const sidebarSections = useMemo(
+    () => getSidebarForRole(role, isSuperAdmin || false),
+    [role, isSuperAdmin]
+  );
+
+  // Auto-expand items with active children
+  useEffect(() => {
+    const newExpanded = new Set<string>();
+    sidebarSections.forEach((section) => {
+      section.items.forEach((item) => {
+        if (item.children && item.children.length > 0) {
+          const hasActiveChild = item.children.some(child => 
+            pathname === child.href || pathname?.startsWith(child.href + "/")
+          );
+          if (hasActiveChild) {
+            newExpanded.add(item.href);
+          }
+        }
+      });
+    });
+    
+    // Only update if there are new items to expand
+    setExpandedItems(prev => {
+      let hasChanges = false;
+      const merged = new Set(prev);
+      newExpanded.forEach(href => {
+        if (!merged.has(href)) {
+          merged.add(href);
+          hasChanges = true;
+        }
+      });
+      // Only return new set if there were changes to prevent infinite loop
+      return hasChanges ? merged : prev;
+    });
+  }, [pathname, sidebarSections]);
 
   // Initialize collapsed sections based on defaultCollapsed
   useEffect(() => {
@@ -118,9 +154,10 @@ export default function SISLayout({
   }
 
   return (
-    <div className="flex min-h-screen flex-col">
-      {/* Top Bar */}
-      <header className="border-b bg-background">
+    <ToastProvider>
+      <div className="flex min-h-screen flex-col">
+        {/* Top Bar */}
+        <header className="border-b bg-background">
         <div className="flex h-14 items-center justify-between gap-4 px-4 md:px-6">
           <div className="flex items-center gap-3">
             <h1 className="text-lg font-semibold">vSchool · SIS</h1>
@@ -204,7 +241,72 @@ export default function SISLayout({
                   )}
                   {!isCollapsed && section.items.map((item) => {
                     const Icon = item.icon;
+                    const hasChildren = item.children && item.children.length > 0;
                     const isActive = pathname === item.href || pathname?.startsWith(item.href + "/");
+                    const isExpanded = expandedItems.has(item.href);
+
+                    const toggleExpanded = () => {
+                      setExpandedItems(prev => {
+                        const newSet = new Set(prev);
+                        if (newSet.has(item.href)) {
+                          newSet.delete(item.href);
+                        } else {
+                          newSet.add(item.href);
+                        }
+                        return newSet;
+                      });
+                    };
+
+                    if (hasChildren) {
+                      return (
+                        <div key={item.href} className="space-y-1">
+                          <div className="flex items-center gap-1">
+                            <Button
+                              variant={isActive ? "secondary" : "ghost"}
+                              className="flex-1 justify-start gap-2"
+                              onClick={toggleExpanded}
+                            >
+                              <Icon className="size-4 shrink-0" />
+                              <span className="whitespace-nowrap flex-1 text-left">{item.label}</span>
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="px-2"
+                              onClick={toggleExpanded}
+                            >
+                              {isExpanded ? (
+                                <ChevronDown className="size-4" />
+                              ) : (
+                                <ChevronRight className="size-4" />
+                              )}
+                            </Button>
+                          </div>
+                          {isExpanded && (
+                            <div className="ml-4 space-y-1">
+                              {item.children?.map((child) => {
+                                const ChildIcon = child.icon;
+                                const isChildActive = pathname === child.href || pathname?.startsWith(child.href + "/");
+                                return (
+                                  <Button
+                                    key={child.href}
+                                    variant={isChildActive ? "secondary" : "ghost"}
+                                    className="w-full justify-start gap-2 text-sm"
+                                    asChild
+                                  >
+                                    <Link href={child.href}>
+                                      <ChildIcon className="size-4 shrink-0" />
+                                      <span className="whitespace-nowrap">{child.label}</span>
+                                    </Link>
+                                  </Button>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    }
+
                     return (
                       <Button
                         key={item.href}
@@ -229,6 +331,7 @@ export default function SISLayout({
         <main className="flex-1 p-4 md:p-6">{children}</main>
       </div>
     </div>
+    </ToastProvider>
   );
 }
 

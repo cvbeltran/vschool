@@ -25,6 +25,7 @@ import { Plus, CheckCircle, XCircle, UserCheck, Loader2, Clock, ExternalLink, In
 import { normalizeRole, canPerform } from "@/lib/rbac";
 import { useRouter } from "next/navigation";
 import { useOrganization } from "@/lib/hooks/use-organization";
+import { addStudentToSection } from "@/lib/phase6/operations";
 import {
   Tooltip,
   TooltipContent,
@@ -975,6 +976,60 @@ export default function AdmissionsPage() {
       setError(createError.message || "Failed to create student record.");
       setEnrollingId(null);
       return;
+    }
+
+    // CRITICAL: When enrolling a student, if the admission has a section_id,
+    // automatically create section_students entry (this is required for Operations > Sections)
+    // The section_id in admissions table is metadata - the actual operational grouping
+    // happens in section_students table
+    if (studentResult?.id && admissionOrgId && enrollingAdmission.section_id && enrollingAdmission.school_id) {
+      try {
+        // Check if student is already in section_students to avoid duplicates
+        const { data: existingSectionStudent, error: checkError } = await supabase
+          .from("section_students")
+          .select("id")
+          .eq("student_id", studentResult.id)
+          .eq("section_id", enrollingAdmission.section_id)
+          .eq("status", "active")
+          .is("end_date", null)
+          .maybeSingle();
+
+        if (checkError) {
+          console.error("Error checking for existing section_student:", checkError);
+        }
+
+        if (!existingSectionStudent) {
+          // Automatically INSERT into section_students when student is enrolled with a section
+          // This is the critical step that makes students appear in Operations > Sections
+          try {
+            await addStudentToSection({
+              organization_id: admissionOrgId,
+              school_id: enrollingAdmission.school_id,
+              section_id: enrollingAdmission.section_id,
+              student_id: studentResult.id,
+              start_date: new Date().toISOString().split("T")[0],
+              status: "active",
+            });
+            console.log(`✅ Successfully inserted student ${studentResult.id} into section_students (section: ${enrollingAdmission.section_id})`);
+          } catch (addError: any) {
+            console.error("Failed to insert student into section_students:", addError);
+            // Show a warning but don't fail enrollment
+            setError(`Student enrolled successfully, but failed to add to section: ${addError.message}`);
+          }
+        } else {
+          console.log(`Student ${studentResult.id} already in section_students for section ${enrollingAdmission.section_id}, skipping`);
+        }
+      } catch (sectionError: any) {
+        // Log error but don't fail enrollment - section assignment is secondary
+        console.error("Failed to process section_students sync:", sectionError);
+        // Don't show error to user as enrollment was successful
+      }
+    } else {
+      if (!enrollingAdmission.section_id) {
+        console.log(`No section_id in admission ${enrollingAdmission.id}, skipping section_students insert`);
+      } else if (!enrollingAdmission.school_id) {
+        console.log(`No school_id in admission ${enrollingAdmission.id}, skipping section_students insert`);
+      }
     }
 
     // Refresh admissions list - filter by organization_id unless super admin

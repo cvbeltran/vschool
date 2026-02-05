@@ -40,6 +40,9 @@ import {
   Building,
   CalendarClock,
   CheckCircle2,
+  Calculator,
+  ClipboardList,
+  PenTool,
 } from "lucide-react";
 import { LucideIcon } from "lucide-react";
 
@@ -52,6 +55,8 @@ export interface SidebarItem {
   allowedRoles: NormalizedRole[];
   superAdminOnly?: boolean; // New property for super admin only items
   children?: SidebarItem[];
+  // If item has children, clicking parent will expand/collapse instead of navigate
+  // Parent href is used as fallback/default when no children are active
 }
 
 export interface SidebarSection {
@@ -305,6 +310,50 @@ export const sidebarConfig: SidebarSection[] = [
         icon: FileBarChart,
         allowedRoles: ["principal", "admin"],
       },
+      {
+        label: "Gradebook",
+        href: "/sis/gradebook/sections",
+        icon: Calculator,
+        allowedRoles: ["principal", "admin", "teacher"],
+        children: [
+          {
+            label: "Schemes",
+            href: "/sis/gradebook/schemes",
+            icon: Award,
+            allowedRoles: ["principal", "admin"],
+          },
+          {
+            label: "My Sections",
+            href: "/sis/gradebook/sections",
+            icon: BookOpen,
+            allowedRoles: ["principal", "admin", "teacher"],
+          },
+          {
+            label: "Graded Items",
+            href: "/sis/gradebook/items",
+            icon: ClipboardList,
+            allowedRoles: ["principal", "admin", "teacher"],
+          },
+          {
+            label: "Score Entry",
+            href: "/sis/gradebook/scores",
+            icon: PenTool,
+            allowedRoles: ["principal", "admin", "teacher"],
+          },
+          {
+            label: "Compute Runs",
+            href: "/sis/gradebook/compute-runs",
+            icon: Calculator,
+            allowedRoles: ["principal", "admin", "teacher"],
+          },
+          {
+            label: "Phase 4 Links",
+            href: "/sis/gradebook/phase4-links",
+            icon: Link2,
+            allowedRoles: ["principal", "admin"],
+          },
+        ],
+      },
     ],
   },
   {
@@ -396,6 +445,12 @@ export const sidebarConfig: SidebarSection[] = [
         label: "Sections",
         href: "/sis/settings/sections",
         icon: FolderTree,
+        allowedRoles: ["principal", "admin"],
+      },
+      {
+        label: "Subjects",
+        href: "/sis/settings/subjects",
+        icon: Award,
         allowedRoles: ["principal", "admin"],
       },
       {

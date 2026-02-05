@@ -8,19 +8,24 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, Loader2, Upload, X } from "lucide-react";
 import { useOrganization } from "@/lib/hooks/use-organization";
 import {
   createMyPortfolioArtifact,
   type CreateMyPortfolioArtifactPayload,
   type PortfolioArtifactAttachment,
 } from "@/lib/phase6/portfolio";
+import { uploadPortfolioFile, isImageFile, getFileNameFromUrl } from "@/lib/student/file-upload";
+import { supabase } from "@/lib/supabase/client";
 
 export default function NewPortfolioArtifactPage() {
   const router = useRouter();
   const { organizationId, isLoading: orgLoading } = useOrganization();
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
+  const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [studentId, setStudentId] = useState<string | null>(null);
   
   const [formData, setFormData] = useState({
     artifact_type: "text" as "upload" | "link" | "text",
@@ -33,6 +38,92 @@ export default function NewPortfolioArtifactPage() {
     evidence_type: "",
     attachments: [] as PortfolioArtifactAttachment[],
   });
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [uploadedFileName, setUploadedFileName] = useState<string>("");
+
+  // Get student ID for file upload (staff may have student records)
+  useEffect(() => {
+    const fetchStudentId = async () => {
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session) {
+          setError("Not authenticated");
+          setLoading(false);
+          return;
+        }
+
+        const { data: profile } = await supabase
+          .from("profiles")
+          .select("id, organization_id")
+          .eq("id", session.user.id)
+          .single();
+
+        if (!profile) {
+          setLoading(false);
+          return;
+        }
+
+        const { data: user } = await supabase.auth.getUser();
+        if (user?.user?.email && profile.organization_id) {
+          const { data: student } = await supabase
+            .from("students")
+            .select("id")
+            .eq("primary_email", user.user.email)
+            .eq("organization_id", profile.organization_id)
+            .maybeSingle();
+          if (student) {
+            setStudentId(student.id);
+          }
+        }
+      } catch (err: any) {
+        // Non-critical - file upload just won't work if no student ID
+        console.error("Error fetching student ID:", err);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    if (!orgLoading && organizationId) {
+      fetchStudentId();
+    }
+  }, [orgLoading, organizationId]);
+
+  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (!studentId) {
+      setError("File upload requires a student account. Please use the link or text options, or contact support.");
+      return;
+    }
+
+    setSelectedFile(file);
+    setUploading(true);
+    setError(null);
+
+    try {
+      const result = await uploadPortfolioFile(file, studentId);
+      if (result.error) {
+        setError(result.error);
+        setSelectedFile(null);
+        return;
+      }
+
+      setFormData({ ...formData, file_url: result.url });
+      setUploadedFileName(file.name);
+    } catch (err: any) {
+      setError(err.message || "Failed to upload file");
+      setSelectedFile(null);
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const handleRemoveFile = () => {
+    setSelectedFile(null);
+    setFormData({ ...formData, file_url: "" });
+    setUploadedFileName("");
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -62,7 +153,12 @@ export default function NewPortfolioArtifactPage() {
       return;
     }
 
-    setLoading(true);
+    if (formData.artifact_type === "upload" && !formData.file_url.trim()) {
+      setError("Please upload a file or wait for upload to complete");
+      return;
+    }
+
+    setSubmitting(true);
 
     try {
       const payload: CreateMyPortfolioArtifactPayload = {
@@ -76,20 +172,19 @@ export default function NewPortfolioArtifactPage() {
         occurred_on: formData.occurred_on || null,
         evidence_type: formData.evidence_type || null,
         attachments: formData.attachments.length > 0 ? formData.attachments : null,
-        source: "student_upload",
+        source: "staff_added",
       };
 
       const artifact = await createMyPortfolioArtifact(payload);
       router.push(`/sis/phase6/portfolio/my/${artifact.id}`);
     } catch (err: any) {
-      console.error("Error creating portfolio artifact:", err);
       setError(err.message || "Failed to create portfolio artifact");
     } finally {
-      setLoading(false);
+      setSubmitting(false);
     }
   };
 
-  if (orgLoading) {
+  if (orgLoading || loading) {
     return (
       <div className="space-y-6">
         <h1 className="text-2xl font-semibold">Create Portfolio Artifact</h1>
@@ -151,7 +246,7 @@ export default function NewPortfolioArtifactPage() {
                 }
                 placeholder="e.g., My Resume, Project Reflection, Certificate"
                 required
-                disabled={loading}
+                disabled={submitting}
               />
             </div>
 
@@ -165,28 +260,68 @@ export default function NewPortfolioArtifactPage() {
                 }
                 placeholder="Optional description of this artifact"
                 rows={3}
-                disabled={loading}
+                disabled={submitting}
               />
             </div>
 
             {formData.artifact_type === "upload" && (
               <div className="space-y-2">
-                <Label htmlFor="file_url">
-                  File URL <span className="text-destructive">*</span>
+                <Label htmlFor="fileUpload">
+                  Upload File <span className="text-destructive">*</span>
                 </Label>
-                <Input
-                  id="file_url"
-                  value={formData.file_url}
-                  onChange={(e) =>
-                    setFormData({ ...formData, file_url: e.target.value })
-                  }
-                  placeholder="https://example.com/file.pdf or storage path"
-                  required
-                  disabled={loading}
-                />
-                <p className="text-xs text-muted-foreground">
-                  Note: File upload functionality will be implemented with storage integration.
-                </p>
+                {!formData.file_url ? (
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-2">
+                      <Input
+                        id="fileUpload"
+                        type="file"
+                        onChange={handleFileSelect}
+                        disabled={uploading || submitting}
+                        className="cursor-pointer"
+                        accept="image/*,application/pdf,.doc,.docx,.txt"
+                      />
+                      {uploading && (
+                        <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                      )}
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      Upload an image, PDF, or document file (max size: 10MB)
+                      {!studentId && " - Note: File upload requires a student account linked to your profile"}
+                    </p>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between p-3 border rounded-md bg-muted/50">
+                      <div className="flex items-center gap-2 flex-1 min-w-0">
+                        <Upload className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+                        <span className="text-sm truncate" title={uploadedFileName || getFileNameFromUrl(formData.file_url)}>
+                          {uploadedFileName || getFileNameFromUrl(formData.file_url)}
+                        </span>
+                      </div>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={handleRemoveFile}
+                        disabled={uploading || submitting}
+                      >
+                        <X className="h-4 w-4" />
+                      </Button>
+                    </div>
+                    {isImageFile(formData.file_url) && (
+                      <div className="mt-2">
+                        <img
+                          src={formData.file_url}
+                          alt="Preview"
+                          className="max-w-full max-h-64 rounded-md border"
+                          onError={(e) => {
+                            (e.target as HTMLImageElement).style.display = "none";
+                          }}
+                        />
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             )}
 
@@ -204,7 +339,7 @@ export default function NewPortfolioArtifactPage() {
                   }
                   placeholder="https://example.com/project"
                   required
-                  disabled={loading}
+                  disabled={submitting}
                 />
               </div>
             )}
@@ -223,7 +358,7 @@ export default function NewPortfolioArtifactPage() {
                   placeholder="Enter your text content here..."
                   rows={8}
                   required
-                  disabled={loading}
+                  disabled={submitting}
                 />
               </div>
             )}
@@ -237,7 +372,7 @@ export default function NewPortfolioArtifactPage() {
                 onChange={(e) =>
                   setFormData({ ...formData, occurred_on: e.target.value })
                 }
-                disabled={loading}
+                disabled={submitting}
               />
               <p className="text-xs text-muted-foreground">
                 Date when this artifact/evidence occurred (not when uploaded)
@@ -253,7 +388,7 @@ export default function NewPortfolioArtifactPage() {
                   setFormData({ ...formData, evidence_type: e.target.value })
                 }
                 placeholder="e.g., observation, assessment, reflection, project"
-                disabled={loading}
+                disabled={submitting}
               />
             </div>
 
@@ -281,12 +416,12 @@ export default function NewPortfolioArtifactPage() {
                 type="button"
                 variant="outline"
                 onClick={() => router.back()}
-                disabled={loading}
+                disabled={submitting || uploading}
               >
                 Cancel
               </Button>
-              <Button type="submit" disabled={loading}>
-                {loading ? "Creating..." : "Create Artifact"}
+              <Button type="submit" disabled={submitting || uploading}>
+                {submitting ? "Creating..." : "Create Artifact"}
               </Button>
             </div>
           </form>

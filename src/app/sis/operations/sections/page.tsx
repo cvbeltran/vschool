@@ -34,6 +34,7 @@ import {
   listSectionStudents,
   addStudentToSection,
   removeStudentFromSection,
+  syncEnrollmentsToSectionStudents,
   type Section,
   type CreateSectionPayload,
   type UpdateSectionPayload,
@@ -115,6 +116,8 @@ export default function SectionsPage() {
     Array<{ id: string; first_name: string | null; last_name: string | null; student_number: string | null }>
   >([]);
   const [studentSearch, setStudentSearch] = useState("");
+  const [syncing, setSyncing] = useState(false);
+  const [syncResult, setSyncResult] = useState<{ synced: number; skipped: number; errors: number } | null>(null);
 
   // Fetch user role
   useEffect(() => {
@@ -359,6 +362,7 @@ export default function SectionsPage() {
     setLoadingStudents(true);
     try {
       const students = await listSectionStudents(section.id);
+      console.log(`Loaded ${students.length} students for section ${section.id}:`, students);
       setSectionStudents(students);
       // Fetch available students
       let studentsQuery = supabase
@@ -414,6 +418,37 @@ export default function SectionsPage() {
           message: errorMessage,
         });
       }
+    }
+  };
+
+  const handleSyncEnrollments = async () => {
+    if (!organizationId) return;
+    setSyncing(true);
+    setSyncResult(null);
+    try {
+      const result = await syncEnrollmentsToSectionStudents(organizationId);
+      setSyncResult(result);
+      console.log("Sync result:", result);
+      // Refresh sections list to show updated student counts
+      if (organizationId) {
+        const sections = await listSections(organizationId);
+        setSections(sections);
+      }
+      // If a section dialog is open, refresh the students list
+      if (selectedSection) {
+        const students = await listSectionStudents(selectedSection.id);
+        console.log("Refreshed students for section:", selectedSection.id, students);
+        setSectionStudents(students);
+      }
+    } catch (error: any) {
+      console.error("Error syncing enrollments:", error);
+      setErrorDialog({
+        open: true,
+        title: "Sync Error",
+        message: error.message || "Failed to sync enrollments",
+      });
+    } finally {
+      setSyncing(false);
     }
   };
 
@@ -478,13 +513,35 @@ export default function SectionsPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold">Sections</h1>
-        {canManage && (
-          <Button onClick={() => handleOpenDialog()}>
-            <Plus className="mr-2 h-4 w-4" />
-            Create Section
+        <div className="flex gap-2">
+          <Button
+            variant="outline"
+            onClick={handleSyncEnrollments}
+            disabled={syncing || !organizationId}
+          >
+            {syncing ? "Syncing..." : "Sync Enrollments"}
           </Button>
-        )}
+          {canManage && (
+            <Button onClick={() => handleOpenDialog()}>
+              <Plus className="mr-2 h-4 w-4" />
+              Create Section
+            </Button>
+          )}
+        </div>
       </div>
+
+      {syncResult && (
+        <div className={`p-4 rounded-md ${
+          syncResult.errors > 0 
+            ? "bg-yellow-50 border border-yellow-200 text-yellow-800" 
+            : "bg-green-50 border border-green-200 text-green-800"
+        }`}>
+          <p className="font-medium">Sync Complete</p>
+          <p className="text-sm mt-1">
+            Synced: {syncResult.synced} | Skipped: {syncResult.skipped} | Errors: {syncResult.errors}
+          </p>
+        </div>
+      )}
 
       {/* Archive Error Display */}
       {archiveError && (

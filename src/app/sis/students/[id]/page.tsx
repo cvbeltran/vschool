@@ -517,13 +517,6 @@ export default function StudentDetailPage() {
           // economic_status_id: Preserve fetched value (null or UUID string)
         };
         
-            sex_id: defaultedStudent.sex_id,
-            economic_status_id: defaultedStudent.economic_status_id,
-            primary_language_id: defaultedStudent.primary_language_id,
-            guardian_relationship_id: defaultedStudent.guardian_relationship_id,
-          });
-        }
-        
         // Always update formData with fresh data from database (important for refresh)
         // Only set initialized flag if this is the first time for this studentId
         setFormData(defaultedStudent);
