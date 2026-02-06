@@ -22,6 +22,7 @@ import {
 } from "@/components/ui/select";
 import { Experience } from "@/lib/ams";
 import { supabase } from "@/lib/supabase/client";
+import { fetchTaxonomyItems, type TaxonomyItem } from "@/lib/taxonomies";
 
 interface ExperienceFormProps {
   open: boolean;
@@ -89,6 +90,7 @@ export function ExperienceForm({
   const [programs, setPrograms] = useState<Program[]>([]);
   const [sections, setSections] = useState<Section[]>([]);
   const [batches, setBatches] = useState<Batch[]>([]);
+  const [experienceTypeOptions, setExperienceTypeOptions] = useState<TaxonomyItem[]>([]);
 
   useEffect(() => {
     if (experience) {
@@ -174,6 +176,22 @@ export function ExperienceForm({
 
     fetchBatches();
   }, [open, organizationId, isSuperAdmin]);
+
+  // Fetch experience type taxonomy items
+  useEffect(() => {
+    if (!open) return;
+
+    const fetchExperienceTypes = async () => {
+      const result = await fetchTaxonomyItems(
+        "experience_type",
+        null,
+        organizationId || null
+      );
+      setExperienceTypeOptions(result.items);
+    };
+
+    fetchExperienceTypes();
+  }, [open, organizationId]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -265,13 +283,22 @@ export function ExperienceForm({
             </div>
             <div className="space-y-2">
               <Label htmlFor="experience_type">Experience Type</Label>
-              <Input
-                id="experience_type"
-                value={experienceType}
-                onChange={(e) => setExperienceType(e.target.value)}
-                placeholder="e.g., mentoring, apprenticeship, lab, studio, project"
+              <Select
+                value={experienceType || undefined}
+                onValueChange={(value) => setExperienceType(value === "__none__" ? "" : value)}
                 disabled={isSubmitting}
-              />
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Select experience type" />
+                </SelectTrigger>
+                <SelectContent>
+                  {experienceTypeOptions.map((item) => (
+                    <SelectItem key={item.id} value={item.label}>
+                      {item.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
