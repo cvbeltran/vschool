@@ -25,7 +25,8 @@ export default function StudentLayoutClient({
 
   useEffect(() => {
     const verifyStudentRole = async () => {
-      // Skip verification for auth routes
+      // Skip verification for auth routes - these are handled by server layout
+      // CRITICAL: Early return prevents any logic from running on reset-password page
       if (pathname?.startsWith("/student/login") || pathname?.startsWith("/student/reset-password")) {
         return;
       }
@@ -51,10 +52,8 @@ export default function StudentLayoutClient({
 
       // CRITICAL: Re-check must_reset_password flag from database
       // The server-side prop might be stale if user just logged in and cleared the flag
-      // Only redirect to reset-password if:
-      // 1. Flag is still true in database
-      // 2. User is NOT coming from a normal login (has valid session with password auth)
-      // 3. User is coming from invite flow (check URL params)
+      // Only redirect to reset-password if flag is still true
+      // Note: Server layout already handles redirect for must_reset_password, but this is a safety check
       const { data: student } = await supabase
         .from("students")
         .select("must_reset_password")
@@ -62,38 +61,18 @@ export default function StudentLayoutClient({
         .single();
 
       if (student?.must_reset_password === true) {
-        // Check if this is from invite flow (has code/type in URL) or normal login
-        const urlParams = new URLSearchParams(window.location.search);
-        const hash = window.location.hash;
-        const isFromInvite = urlParams.has('code') || urlParams.has('type') || 
-                             (hash && hash.includes('type=invite'));
-        
-        if (isFromInvite) {
-          // Coming from invite email - redirect to reset-password
-          if (pathname !== "/student/reset-password") {
-            router.replace("/student/reset-password");
-          }
-        } else {
-          // Normal login - they've proven they have a password, clear the flag
-          // This handles the case where the flag wasn't cleared during login
-          await supabase
-            .from("students")
-            .update({ 
-              must_reset_password: false,
-              last_login_at: new Date().toISOString()
-            })
-            .eq("profile_id", session.user.id);
-          
-          // Don't redirect if already on dashboard
-          if (pathname === "/student/reset-password") {
-            router.replace("/student/dashboard");
-          }
+        // Server layout should have already redirected, but if we're here, redirect to reset-password
+        // CRITICAL: Check we're not already on reset-password to prevent loop
+        if (pathname !== "/student/reset-password" && !pathname?.startsWith("/student/reset-password/")) {
+          router.replace("/student/reset-password?fromInvite=true");
         }
+        return;
       }
     };
 
     verifyStudentRole();
-  }, [mustResetPassword, pathname, router]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pathname]); // Only depend on pathname - router is stable, mustResetPassword causes loops
 
   const handleLogout = async () => {
     await supabase.auth.signOut();

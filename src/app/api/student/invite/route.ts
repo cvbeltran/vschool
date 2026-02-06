@@ -120,8 +120,8 @@ export async function POST(request: NextRequest) {
     // Prepare redirect URL for invite email
     const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || 'http://localhost:3000';
     const redirectTo = `${siteUrl}/api/auth/callback?type=invite&next=${encodeURIComponent('/student/reset-password')}`;
-    
-    // Check if student already has a profile_id
+
+    // Check if student already has a profile_id (existing account)
     if (student.profile_id) {
       // Student already has an account - resend invite
       userId = student.profile_id;
@@ -224,7 +224,7 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Upsert profiles row
+    // Create or update profiles record with organization_id
     const { error: profileError } = await supabaseServer
       .from("profiles")
       .upsert({
@@ -266,18 +266,23 @@ export async function POST(request: NextRequest) {
         await supabaseServer.from("profiles").delete().eq("id", userId);
       }
       return NextResponse.json(
-        { error: "Failed to update student record" },
-        { status: 500 }
+        { error: updateError.message || "Failed to update student record" },
+        { status: 400 }
       );
     }
 
-    // Return response
-    return NextResponse.json({
-      ok: true,
+    // Return response matching staff create pattern
+    const response: any = {
+      success: true,
+      isNewAccount,
       message: isNewAccount 
-        ? "Invitation email sent successfully. Student will receive an email to set their password."
-        : "Invitation email resent successfully.",
-    });
+        ? "Invitation email sent successfully. The student will receive an email with a link to set up their account and password."
+        : student.profile_id
+        ? "Invitation email resent successfully. The student will receive an email with a link to set up their account and password."
+        : "Student record updated and linked to existing account.",
+    };
+
+    return NextResponse.json(response);
 
   } catch (error: any) {
     console.error("Error in student invite:", error);
