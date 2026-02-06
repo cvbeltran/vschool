@@ -34,30 +34,12 @@ export default function ResetPasswordPage() {
           .eq("id", session.user.id)
           .single();
 
-        if (profile?.role !== "student") {
+        if (!profile || profile.role !== "student") {
           router.push("/sis/auth/login");
           return;
         }
 
-        // Check must_reset_password flag
-        const { data: student } = await supabase
-          .from("students")
-          .select("must_reset_password")
-          .eq("profile_id", session.user.id)
-          .single();
-
-        if (!student) {
-          setError("Student record not found. Please contact your administrator.");
-          setCheckingAuth(false);
-          return;
-        }
-
-        if (!student.must_reset_password) {
-          // Already reset, redirect to dashboard
-          router.push("/student/dashboard");
-          return;
-        }
-
+        // User is authenticated and is a student - allow them to set password
         setCheckingAuth(false);
       } catch (err) {
         console.error("Error checking auth:", err);
@@ -140,6 +122,9 @@ export default function ResetPasswordPage() {
     }
   };
 
+  // Show loading state while checking auth
+  // CRITICAL: This prevents the form from rendering until auth check is complete
+  // which prevents any potential navigation loops
   if (checkingAuth) {
     return (
       <div className="flex min-h-screen items-center justify-center p-4">
@@ -155,9 +140,9 @@ export default function ResetPasswordPage() {
     <div className="flex min-h-screen items-center justify-center p-4">
       <div className="w-full max-w-md space-y-6">
         <div className="space-y-2 text-center">
-          <h1 className="text-2xl font-semibold">Reset Your Password</h1>
+          <h1 className="text-2xl font-semibold">Set Your Password</h1>
           <p className="text-muted-foreground text-sm">
-            You must set a new password before accessing your account
+            Please create a password to access your account
           </p>
         </div>
 
