@@ -48,7 +48,46 @@ function HomeContent() {
         if (type === 'recovery') {
           router.push('/sis/auth/reset-password');
         } else if (type === 'invite' || type === 'signup') {
-          router.push('/sis/auth/set-password');
+          // Check if this is a student invite by checking the URL or user role
+          // First, try to get session from hash fragment tokens
+          const handleInviteRedirect = async () => {
+            try {
+              const { supabase } = await import('@/lib/supabase/client');
+              
+              // Supabase client automatically processes hash fragments
+              const { data: { session } } = await supabase.auth.getSession();
+              
+              if (session) {
+                // Check user role to determine redirect
+                const { data: profile } = await supabase
+                  .from("profiles")
+                  .select("role")
+                  .eq("id", session.user.id)
+                  .single();
+                
+                if (profile?.role === "student") {
+                  // Redirect to student callback page which will handle the redirect properly
+                  router.push('/student/auth/callback?type=invite&fromInvite=true');
+                } else {
+                  router.push('/sis/auth/set-password');
+                }
+              } else {
+                // No session yet - check URL for next parameter or default to SIS
+                const currentUrl = window.location.href;
+                if (currentUrl.includes('/student/') || currentUrl.includes('next=/student/')) {
+                  router.push('/student/auth/callback?type=invite&fromInvite=true');
+                } else {
+                  router.push('/sis/auth/set-password');
+                }
+              }
+            } catch (err) {
+              console.error("Error handling invite redirect:", err);
+              // Default to SIS if error
+              router.push('/sis/auth/set-password');
+            }
+          };
+          
+          handleInviteRedirect();
         } else {
           router.push('/sis/auth/callback');
         }

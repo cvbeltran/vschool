@@ -31,6 +31,74 @@ function LoginForm() {
         return;
       }
 
+      // Check for hash fragments first (PKCE flow from invite links)
+      const hash = window.location.hash;
+      if (hash && hash.length > 1) {
+        const hashParams = new URLSearchParams(hash.substring(1));
+        const accessToken = hashParams.get('access_token');
+        const refreshToken = hashParams.get('refresh_token');
+        const type = hashParams.get('type');
+        
+        // If this is an invite with hash fragments, manually set the session
+        if (type === 'invite' && accessToken && refreshToken) {
+          setHasCheckedSession(true); // Mark as checked to prevent re-running
+          
+          try {
+            // Manually set the session from hash fragments
+            const { data: { session }, error: sessionError } = await supabase.auth.setSession({
+              access_token: accessToken,
+              refresh_token: refreshToken,
+            });
+            
+            if (sessionError || !session) {
+              console.error("Error setting session from hash:", sessionError);
+              setError("Invalid or expired invitation link. Please contact your administrator.");
+              setCheckingSession(false);
+              return;
+            }
+            
+            // Clear hash fragments from URL
+            window.history.replaceState(null, '', window.location.pathname + window.location.search);
+            
+            // Session created from hash fragments - check if student needs to set password
+            const { data: profile } = await supabase
+              .from("profiles")
+              .select("role")
+              .eq("id", session.user.id)
+              .single();
+
+            if (!profile || profile.role !== "student") {
+              // Not a student - sign out and show error
+              await supabase.auth.signOut();
+              setError("This login page is for students only.");
+              setCheckingSession(false);
+              return;
+            }
+
+            // Check must_reset_password flag
+            const { data: student } = await supabase
+              .from("students")
+              .select("must_reset_password")
+              .eq("profile_id", session.user.id)
+              .single();
+
+            if (student?.must_reset_password) {
+              router.replace("/student/reset-password?fromInvite=true");
+              return;
+            } else {
+              // Already set password - go to dashboard
+              window.location.href = "/student/dashboard";
+              return;
+            }
+          } catch (err) {
+            console.error("Error processing invite hash:", err);
+            setError("An error occurred while processing your invitation. Please contact your administrator.");
+            setCheckingSession(false);
+            return;
+          }
+        }
+      }
+
       // Small delay to ensure signOut has completed if coming from logout
       await new Promise(resolve => setTimeout(resolve, 100));
 

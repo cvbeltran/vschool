@@ -17,7 +17,18 @@ export async function GET(request: NextRequest) {
 
   // For recovery type, we might have token or email instead of code
   // Allow recovery type without code (we'll use email for Admin API password update)
+  // Also allow invite type with next parameter pointing to student routes (PKCE flow with hash fragments)
   if (!code && !token && type !== 'recovery') {
+    // Check if this is a student invite (next parameter points to student routes)
+    // In PKCE flow, tokens come in hash fragments, so we need to redirect to a client-side handler
+    if (type === 'invite' && next && next.includes('/student/')) {
+      // Redirect to student callback page - client will handle hash fragments and redirect appropriately
+      const redirectUrl = new URL('/student/auth/callback', request.url);
+      redirectUrl.searchParams.set('type', 'invite');
+      redirectUrl.searchParams.set('fromInvite', 'true');
+      return NextResponse.redirect(redirectUrl);
+    }
+    
     // No code parameter - redirect to login
     const loginUrl = new URL('/sis/auth/login', request.url);
     loginUrl.searchParams.set('error', 'Invalid authentication link');
@@ -191,6 +202,10 @@ export async function GET(request: NextRequest) {
       redirectUrl = next 
         ? new URL(next, request.url)
         : new URL('/sis/auth/set-password', request.url);
+      // Add fromInvite parameter to help detect invite flow after redirect
+      if (type === 'invite') {
+        redirectUrl.searchParams.set('fromInvite', 'true');
+      }
     } else if (next) {
       redirectUrl = new URL(next, request.url);
     } else {
